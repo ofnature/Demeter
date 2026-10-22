@@ -1,0 +1,21 @@
+{
+  "Author": "ofnature",
+  "Name": "Demeter",
+  "InternalName": "Demeter",
+  "Punchline": "Gathers what you ask for — node by node, list by list — for you or for another plugin.",
+  "Description": "Unattended gathering for Miner and Botanist: travels to the zone, flies the node circuit, works collectables to the band asked for, and keeps named gather lists with target amounts. Other plugins (Hephaestus, Odysseus) ask it for items over IPC. Fishing is on the way. Companion to Daedalus and Odysseus.",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "RepoUrl": "https://github.com/ofnature/Demeter",
+  "IconUrl": "https://raw.githubusercontent.com/ofnature/Demeter/main/images/icon.png",
+  "Tags": [
+    "gathering",
+    "fishing",
+    "automation",
+    "multibox"
+  ],
+  "CategoryTags": [
+    "utility"
+  ],
+  "LoadPriority": 0
+}

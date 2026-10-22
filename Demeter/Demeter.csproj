@@ -1,0 +1,62 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+
+  <PropertyGroup>
+    <AssemblyName>Demeter</AssemblyName>
+    <RootNamespace>Demeter</RootNamespace>
+    <Version>0.0.1</Version>
+    <DalamudLibPath>$(AppData)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
+
+    <!--
+      Pin the output directory. The solution declares an x64 platform, so a solution build lands
+      in bin/x64/<Config>/ while a bare project build lands in bin/<Config>/ — and Dalamud's
+      dev-plugin entry points at exactly one of those. Without this, "dotnet build Demeter.sln"
+      appears to succeed while the game keeps loading a stale DLL from the other path, which is
+      indistinguishable from a code change having no effect. (Lesson from Theseus, via Odysseus.)
+    -->
+    <OutputPath>$(MSBuildProjectDirectory)\bin\$(Configuration)\</OutputPath>
+  </PropertyGroup>
+
+  <!--
+    GatherBuddy's node coordinates, shipped verbatim and gzipped, under Apache 2.0. Verbatim on
+    purpose: an unmodified copy is the simplest thing to attribute honestly, and it keeps their file
+    the authority rather than a transcription of it. The licence travels beside it. See NOTICE.md.
+    (Moved here from Odysseus with the gatherer.)
+  -->
+  <ItemGroup>
+    <Content Include="Assets\gatherbuddy-world_locations.json.gz" Condition="Exists('Assets\gatherbuddy-world_locations.json.gz')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\licenses\Apache-2.0.txt" Condition="Exists('..\licenses\Apache-2.0.txt')">
+      <Link>licenses\Apache-2.0.txt</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\NOTICE.md" Condition="Exists('..\NOTICE.md')">
+      <Link>NOTICE.md</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <!-- Allow the test assembly to access internal types -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>Demeter.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!--
+    Dev-plugin reload race (same fix as Charon and Odysseus). Dalamud watches the DLL and reloads
+    the moment it changes, then reads Demeter.json alongside it. The compiler writes the DLL FIRST
+    and DalamudPackager writes the manifest afterwards, so the reload can read a manifest that is
+    still being written and fail with a "load error" that nothing retries.
+
+    Touching the DLL after the manifest is written makes the DLL the LAST file to change, so the
+    watcher's event always finds a complete manifest next to it. This must hook the PACKAGER's
+    targets, not "Build": DalamudPackager registers on AfterTargets="Build" too and SDK targets
+    run after project-defined ones.
+  -->
+  <Target Name="TouchAssemblyAfterPackaging"
+          AfterTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
+    <Touch Files="$(TargetPath)" />
+  </Target>
+
+</Project>
