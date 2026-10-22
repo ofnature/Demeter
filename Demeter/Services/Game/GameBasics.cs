@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -17,13 +18,12 @@ namespace Demeter.Services.Game;
 public sealed record GearsetInfo(int Id, uint ClassJobId, uint ParentClassJobId, int Level);
 
 /// <summary>
-/// The game-facing basics Demeter needs: the character's state, the mount, the pathing and teleport
-/// plugins, gearsets, the bag and self-repair. Copied from Odysseus's <c>GameStepWorld</c> (same
+/// The game-facing basics Demeter needs: the character's state, the mount, Ariadne and Lifestream, gearsets, the bag and self-repair. Copied from Odysseus's <c>GameStepWorld</c> (same
 /// author, both AGPL) — only the members the gatherer and its travel use. Decision-free, like the
 /// original: every judgement lives in <see cref="Traveller"/>, <see cref="GatherRunner"/> and the
 /// list runner, where the fakes can test it.
 /// </summary>
-public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
+public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityState
 {
     /// <summary>GeneralAction 9 — Mount Roulette.</summary>
     private const uint MountRouletteGeneralAction = 9;
@@ -31,16 +31,12 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
     /// <summary>GeneralAction 23 — Dismount.</summary>
     private const uint DismountGeneralAction = 23;
 
-    /// <summary>GeneralAction 4 — Sprint; status 50 while it runs.</summary>
-    private const uint SprintGeneralAction = 4;
-    private const uint SprintStatus = 50;
-
     private readonly IClientState _clientState;
     private readonly IObjectTable _objectTable;
     private readonly ICondition _condition;
     private readonly IGameGui _gameGui;
     private readonly IDataManager _data;
-    private readonly VnavIpc _vnav;
+    private readonly AriadneIpc _ariadne;
     private readonly LifestreamIpc _lifestream;
     private readonly DaedalusIpc _daedalus;
     private readonly AetheryteCatalog _aetherytes;
@@ -49,7 +45,7 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
 
     public GameBasics(
         IClientState clientState, IObjectTable objectTable, ICondition condition, IGameGui gameGui, IDataManager data,
-        VnavIpc vnav, LifestreamIpc lifestream, DaedalusIpc daedalus, AetheryteCatalog aetherytes,
+        AriadneIpc ariadne, LifestreamIpc lifestream, DaedalusIpc daedalus, AetheryteCatalog aetherytes,
         ChatCommandSender chat, Action<string> log)
     {
         _clientState = clientState;
@@ -57,7 +53,7 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
         _condition = condition;
         _gameGui = gameGui;
         _data = data;
-        _vnav = vnav;
+        _ariadne = ariadne;
         _lifestream = lifestream;
         _daedalus = daedalus;
         _aetherytes = aetherytes;
@@ -96,7 +92,6 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
            || _condition[ConditionFlag.BetweenAreas51]
            || _condition[ConditionFlag.Casting];
 
-    public bool IsCasting => _condition[ConditionFlag.Casting];
     public bool InCombat => _condition[ConditionFlag.InCombat];
     public bool IsDead => _objectTable.LocalPlayer?.IsDead ?? false;
     public bool DaedalusDisabledByUser => _daedalus.IsDisabledByUser();
@@ -109,26 +104,6 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
 
     public void Mount() => UseGeneralAction(MountRouletteGeneralAction, "Mount");
     public void Dismount() => UseGeneralAction(DismountGeneralAction, "Dismount");
-
-    public void Jump() => _chat.Send("/generalaction Jump");
-
-    public bool Sprint()
-    {
-        try
-        {
-            if (_objectTable.LocalPlayer is not { } player) return false;
-            foreach (var status in player.StatusList)
-                if (status.StatusId == SprintStatus) return false;
-            var manager = ActionManager.Instance();
-            if (manager == null || manager->GetActionStatus(ActionType.GeneralAction, SprintGeneralAction) != 0)
-                return false;
-            return manager->UseAction(ActionType.GeneralAction, SprintGeneralAction);
-        }
-        catch
-        {
-            return false;
-        }
-    }
 
     /// <summary>Straight off <c>TerritoryType.Mount</c> — false for every city zone.</summary>
     public bool CanMountHere
@@ -187,18 +162,14 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
         }
     }
 
-    // ── Pathing (vnavmesh or Ariadne, as Settings says — VnavIpc speaks both) ──
+    // ── Ariadne ──
 
-    public bool NavmeshReady => _vnav.IsReady;
-    public float NavmeshBuildProgress => _vnav.BuildProgress;
-    public bool IsMoving => _vnav.IsBusy;
-    public bool IsPathfinding => _vnav.IsPathfinding;
-    public int PathWaypointCount => _vnav.WaypointCount;
-    public bool MoveTo(Vector3 destination, bool fly) => _vnav.MoveTo(destination, fly);
-    public bool MoveCloseTo(Vector3 destination, float tolerance, bool fly) => _vnav.MoveCloseTo(destination, tolerance, fly);
-    public bool MoveDirectTo(Vector3 destination, bool fly) => _vnav.MoveDirect(destination, fly);
-    public void StopMoving() => _vnav.Stop();
-    public Vector3? NearestReachablePoint(Vector3 near, float within) => _vnav.NearestReachablePoint(near, within, within);
+    public bool NavReady => _ariadne.IsReady;
+    public bool MoveTo(Vector3 destination, bool fly, float range) => _ariadne.MoveTo(destination, fly, range);
+    public bool IsMoving => _ariadne.IsBusy;
+    public string MoveResult => _ariadne.LastResult;
+    public void StopMoving() => _ariadne.Stop();
+    public Task<Vector3?> NearestReachablePoint(Vector3 near, float within) => _ariadne.NearestReachablePoint(near, within);
 
     // ── Teleport ──
 
@@ -272,6 +243,28 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld
         catch
         {
             return 0;
+        }
+    }
+
+    int IAbilityState.LevelOf(uint classJobId) => LevelOfJob(classJobId);
+
+    /// <summary>
+    /// Daedalus's check (<c>ActionUnlockHelper.IsUnlockLinkSatisfied</c>): an unlock link, or a quest
+    /// written into one, is done. Readable from any job. Unreadable is answered yes — the game
+    /// refusing the action is a better way to learn it than refusing work on a bad read.
+    /// </summary>
+    public bool UnlockDone(uint unlockLink)
+    {
+        if (unlockLink == 0)
+            return true;
+        try
+        {
+            var state = UIState.Instance();
+            return state == null || state->IsUnlockLinkUnlockedOrQuestCompleted(unlockLink);
+        }
+        catch
+        {
+            return true;
         }
     }
 

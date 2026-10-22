@@ -8,10 +8,10 @@ Odysseus's quest gathers and custom deliveries, and your own gather lists.
   short, zone by zone, so each zone costs one teleport. Timed nodes are waited for and caught in
   their window. Completed rows can drop off by themselves, gear is repaired when it wears down,
   and afterwards Demeter can take you home (Return, inn, estate or apartment).
-- **Travel.** Demeter teleports to the attuned aetheryte nearest the node, mounts, and flies
-  wherever the zone's aether currents are done. It walks the circuit of node spawns, lands, and
-  works the node from the ground. If something attacks on the way, Daedalus fights it and Demeter
-  waits.
+- **Travel.** Demeter uses Lifestream to teleport to the attuned aetheryte nearest the node, then
+  hands the node's position to Ariadne, which walks or flies there (flying wherever the zone's aether
+  currents are done). Demeter lands and works the node from the ground, and walks the circuit of
+  node spawns. If something attacks on the way, Daedalus fights it and Demeter waits.
 - **Collectables.** Demeter works a collectable to the collectability asked for and banks it. It
   never banks one below that band and never spends integrity pushing past it.
 - **For other plugins.** Every gate is listed in [For other plugins](#for-other-plugins) below.
@@ -20,7 +20,7 @@ Companion to Daedalus and Odysseus. AGPL-3.0; see `NOTICE.md` for third-party da
 
 ## Needs
 
-- **vnavmesh** or **Ariadne** for walking and flying (chosen in Settings).
+- **Ariadne** for walking and flying.
 - **Lifestream** for teleports and going home.
 - A gearset saved for Miner and for Botanist.
 - **Daedalus** is optional. With it, anything that attacks on the way gets fought.
@@ -36,7 +36,7 @@ Companion to Daedalus and Odysseus. AGPL-3.0; see `NOTICE.md` for third-party da
 ## Moving from Odysseus
 
 The gatherer used to live in Odysseus. On first load, Demeter reads your gather lists, where a
-finished run takes you, the repair threshold and the pathing choice from Odysseus's config, as long
+finished run takes you and the repair threshold from Odysseus's config, as long
 as Demeter has no lists of its own yet. It does this once. Odysseus's copy is not touched.
 
 ---

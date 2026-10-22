@@ -14,8 +14,18 @@ public class TravellerTests
         return travel.Status;
     }
 
+    /// <summary>Tick until the fake's move count reaches <paramref name="moves"/>.</summary>
+    private static void TickUntilMoves(Traveller travel, FakeTravelWorld world, int moves, int max = 40)
+    {
+        for (var i = 0; i < max && world.MoveCount < moves && travel.Status == TravelStatus.Running; i++)
+        {
+            travel.Tick();
+            world.Advance(0.5);
+        }
+    }
+
     [Fact]
-    public void Another_zone_is_reached_by_teleporting_to_the_attuned_aetheryte_nearest_the_point()
+    public void Another_zone_is_reached_by_Lifestream_to_the_nearest_attuned_aetheryte_then_Ariadne()
     {
         var world = new FakeTravelWorld { TerritoryId = 129, ArriveOnMove = true };
         world.Attuned[1] = (1187, new Vector3(900, 0, 900));
@@ -27,7 +37,8 @@ public class TravellerTests
 
         Assert.Contains("Teleport 2", world.Calls);
         Assert.DoesNotContain("Teleport 1", world.Calls);
-        Assert.Equal(Node, world.PlayerPosition);
+        Assert.True(world.Calls.IndexOf("Teleport 2") < world.Calls.FindIndex(c => c.StartsWith("Move", StringComparison.Ordinal)));
+        Assert.Equal(Node, world.LastMoveTarget);
     }
 
     [Fact]
@@ -71,7 +82,7 @@ public class TravellerTests
     }
 
     [Fact]
-    public void A_long_leg_mounts_and_flies_where_the_currents_are_done()
+    public void Where_the_currents_are_done_Ariadne_is_asked_to_fly()
     {
         var world = new FakeTravelWorld { CanFlyHere = true, ArriveOnMove = true };
         var travel = new Traveller(world);
@@ -79,18 +90,19 @@ public class TravellerTests
         travel.Begin(1187, Node, fly: true, land: false);
         Assert.Equal(TravelStatus.Done, Run(travel, world));
 
-        Assert.Contains("Mount", world.Calls);
         Assert.True(world.LastMoveFly);
+        Assert.DoesNotContain("Mount", world.Calls);   // Ariadne calls the mount for a flight
     }
 
     [Fact]
-    public void Without_currents_the_leg_is_ridden_on_the_ground()
+    public void Without_currents_a_long_ride_is_mounted_for_and_walked()
     {
         var world = new FakeTravelWorld { CanFlyHere = false, ArriveOnMove = true };
         var travel = new Traveller(world);
 
         travel.Begin(1187, Node, fly: true, land: false);
         Assert.Equal(TravelStatus.Done, Run(travel, world));
+        Assert.Contains("Mount", world.Calls);
         Assert.False(world.LastMoveFly);
     }
 
@@ -103,6 +115,92 @@ public class TravellerTests
         travel.Begin(1187, Node, fly: true, land: false);
         Assert.Equal(TravelStatus.Done, Run(travel, world));
         Assert.DoesNotContain("Mount", world.Calls);
+    }
+
+    [Fact]
+    public void A_stop_distance_is_handed_to_Ariadne_as_its_range()
+    {
+        var world = new FakeTravelWorld { ArriveOnMove = true, PlayerPosition = Node + new Vector3(10, 0, 0) };
+        var travel = new Traveller(world);
+
+        travel.Begin(1187, Node, fly: false, land: false, stopDistance: Traveller.DefaultStopDistance);
+        Run(travel, world);
+        Assert.Equal(Traveller.DefaultStopDistance, world.LastMoveRange);
+    }
+
+    [Fact]
+    public void The_travel_waits_for_Ariadne_to_finish()
+    {
+        var world = new FakeTravelWorld { PlayerPosition = Node + new Vector3(20, 0, 0) };
+        var travel = new Traveller(world);
+        travel.Begin(1187, Node, fly: false, land: false);
+        TickUntilMoves(travel, world, 1);
+
+        for (var i = 0; i < 20; i++) { travel.Tick(); world.Advance(0.5); }
+        Assert.Equal(TravelStatus.Running, travel.Status);
+        Assert.Equal(1, world.MoveCount);   // one ask; Ariadne does its own re-pathing
+
+        world.FinishMove("goal reached", Node);
+        Assert.Equal(TravelStatus.Done, Run(travel, world, ticks: 4));
+    }
+
+    [Fact]
+    public void Closest_reachable_point_near_the_node_counts_as_there()
+    {
+        var world = new FakeTravelWorld { PlayerPosition = Node + new Vector3(20, 0, 0) };
+        var travel = new Traveller(world);
+        travel.Begin(1187, Node, fly: false, land: false);
+        TickUntilMoves(travel, world, 1);
+
+        world.FinishMove("closest reachable point, 3.2y short", Node + new Vector3(3.2f, 0, 0));
+        Assert.Equal(TravelStatus.Done, Run(travel, world, ticks: 4));
+    }
+
+    [Fact]
+    public void Stuck_is_asked_again_then_flown_then_given_up_with_Ariadnes_words()
+    {
+        var world = new FakeTravelWorld { CanFlyHere = true, PlayerPosition = Node + new Vector3(20, 0, 0) };
+        var travel = new Traveller(world);
+        travel.Begin(1187, Node, fly: false, land: false);
+
+        TickUntilMoves(travel, world, 1);
+        world.FinishMove("stuck (18y short)");
+        TickUntilMoves(travel, world, 2);
+        Assert.False(world.LastMoveFly);
+
+        world.FinishMove("stuck (18y short)");
+        TickUntilMoves(travel, world, 3);
+        Assert.True(world.LastMoveFly);   // the air, last
+        Assert.Contains(world.Logged, m => m.Contains("flying this leg"));
+
+        world.FinishMove("no path (startOffSurface)");
+        Assert.Equal(TravelStatus.Failed, Run(travel, world, ticks: 6));
+        Assert.Contains("no path (startOffSurface)", travel.FailReason);
+    }
+
+    [Fact]
+    public void Keys_pressed_by_the_player_end_the_travel()
+    {
+        var world = new FakeTravelWorld { PlayerPosition = Node + new Vector3(20, 0, 0) };
+        var travel = new Traveller(world);
+        travel.Begin(1187, Node, fly: false, land: false);
+        TickUntilMoves(travel, world, 1);
+
+        world.FinishMove("stopped");
+        Assert.Equal(TravelStatus.Failed, Run(travel, world, ticks: 4));
+        Assert.Contains("stopped", travel.FailReason);
+    }
+
+    [Fact]
+    public void Without_a_mesh_it_waits_then_says_Ariadne_is_missing()
+    {
+        var world = new FakeTravelWorld { NavReady = false, PlayerPosition = Node + new Vector3(20, 0, 0) };
+        var travel = new Traveller(world);
+        travel.Begin(1187, Node, fly: false, land: false);
+
+        Assert.Equal(TravelStatus.Failed, Run(travel, world, ticks: 100));
+        Assert.Contains("Ariadne", travel.FailReason);
+        Assert.Equal(0, world.MoveCount);
     }
 
     [Fact]
@@ -134,35 +232,38 @@ public class TravellerTests
         };
         var travel = new Traveller(world);
         travel.Begin(1187, Node, fly: true, land: true);
+        TickUntilMoves(travel, world, 1);
+        world.FinishMove("goal reached");   // Ariadne's flight ends over the point
 
         for (var i = 0; i < 30 && !world.Logged.Any(m => m.Contains("not landing")); i++) { travel.Tick(); world.Advance(0.5); }
-
         Assert.Contains(world.Logged, m => m.Contains("not landing"));
-        for (var i = 0; i < 4 && world.LastMoveTarget != floor; i++) { travel.Tick(); world.Advance(0.5); }
+
+        TickUntilMoves(travel, world, 2, max: 6);
         Assert.Equal(floor, world.LastMoveTarget);
         Assert.True(world.LastMoveFly);
     }
 
     [Fact]
-    public void A_fight_on_the_way_holds_the_leg_and_gets_off_the_mount()
+    public void A_fight_on_the_way_stops_the_move_gets_off_and_asks_again_after()
     {
-        var world = new FakeTravelWorld { CanFlyHere = true };
+        var world = new FakeTravelWorld { CanFlyHere = false };
         var travel = new Traveller(world);
-        travel.Begin(1187, Node, fly: true, land: false);
-        for (var i = 0; i < 6; i++) { travel.Tick(); world.Advance(0.5); }
-        Assert.True(world.IsMounted);
+        travel.Begin(1187, Node, fly: false, land: false);
+        TickUntilMoves(travel, world, 1);
+        Assert.True(world.IsMounted);   // a long ground ride
 
         world.InCombat = true;
-        for (var i = 0; i < 400; i++) { travel.Tick(); world.Advance(0.5); }   // long past every move clock
+        for (var i = 0; i < 400; i++) { travel.Tick(); world.Advance(0.5); }   // long past every clock
         Assert.Equal(TravelStatus.Running, travel.Status);
+        Assert.Contains("Stop", world.Calls);
         Assert.Contains("Dismount", world.Calls);
         Assert.False(world.IsMounted);
 
-        // Over: back in the saddle and on to the point.
+        // Over: back in the saddle and the point handed to Ariadne again.
         world.InCombat = false;
         world.ArriveOnMove = true;
         Assert.Equal(TravelStatus.Done, Run(travel, world));
-        Assert.True(world.IsMounted);
+        Assert.Equal(2, world.MoveCount);
         Assert.Contains(world.Logged, m => m.Contains("mounting up"));
     }
 
@@ -177,31 +278,7 @@ public class TravellerTests
     }
 
     [Fact]
-    public void A_point_the_mesh_will_not_reach_is_finished_on_foot_when_close()
-    {
-        var near = Node + new Vector3(8, 0, 0);
-        var world = new FakeTravelWorld { PlayerPosition = near, PathWaypointCount = 0 };
-        var travel = new Traveller(world);
-
-        travel.Begin(1187, Node, fly: false, land: false);
-        for (var i = 0; i < 20 && !world.Calls.Any(c => c.StartsWith("MoveDirect", StringComparison.Ordinal)); i++) { travel.Tick(); world.Advance(0.5); }
-
-        Assert.Contains(world.Calls, c => c.StartsWith("MoveDirect", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public void No_route_anywhere_fails_with_the_reason()
-    {
-        var world = new FakeTravelWorld { PathWaypointCount = 0, NearestReachableFn = (_, _) => null };
-        var travel = new Traveller(world);
-
-        travel.Begin(1187, Node, fly: false, land: false);
-        Assert.Equal(TravelStatus.Failed, Run(travel, world));
-        Assert.Contains("no path", travel.FailReason);
-    }
-
-    [Fact]
-    public void Cancel_stops_the_walk_and_any_hop()
+    public void Cancel_stops_the_move_and_any_hop()
     {
         var world = new FakeTravelWorld();
         var travel = new Traveller(world);

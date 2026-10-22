@@ -26,6 +26,17 @@
     <Content Include="Assets\gatherbuddy-world_locations.json.gz" Condition="Exists('Assets\gatherbuddy-world_locations.json.gz')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!--
+      GatherBuddy Reborn's fish catch data (Apache 2.0), converted and checked against the game's
+      sheets and the fish tracker by Tools/FishImport. Modified from the original: see NOTICE.md.
+    -->
+    <Content Include="Assets\fish-gbr.json.gz" Condition="Exists('Assets\fish-gbr.json.gz')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- GatherBuddy Reborn's community catch records, grouped into stand points and bite times per hole (same tool). -->
+    <Content Include="Assets\fishing-holes.json.gz" Condition="Exists('Assets\fishing-holes.json.gz')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\licenses\Apache-2.0.txt" Condition="Exists('..\licenses\Apache-2.0.txt')">
       <Link>licenses\Apache-2.0.txt</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

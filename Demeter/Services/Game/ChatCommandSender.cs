@@ -8,8 +8,8 @@ namespace Demeter.Services.Game;
 /// Sends a slash command as though the user typed it.
 ///
 /// <para>
-/// Needed because some things Demeter does have no IPC at all — the general actions (Repair,
-/// Jump) are slash commands. They funnel through
+/// Needed because some things Demeter does have no IPC at all — Repair is a general action sent as a
+/// slash command, and so is the home trip. They funnel through
 /// here so there is exactly one place doing this.
 /// </para>
 ///

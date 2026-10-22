@@ -1,11 +1,12 @@
 using System;
 using System.Numerics;
+using System.Threading.Tasks;
 
 namespace Demeter.Services.Travel;
 
 /// <summary>
 /// What <see cref="Traveller"/> needs of the game and of the plugins that move the character —
-/// vnavmesh or Ariadne for the walk and the flight, Lifestream for the teleport. Decision-free:
+/// Lifestream for the teleport into the zone, Ariadne for everything inside it. Decision-free:
 /// "do the thing" or "report the fact", so every judgement stays in <see cref="Traveller"/>, where a
 /// fake can test it.
 /// </summary>
@@ -23,7 +24,6 @@ public interface ITravelWorld
 
     /// <summary>A teleport cast, a zone load, or Lifestream at work.</summary>
     bool IsTravelBusy { get; }
-    bool IsCasting { get; }
     bool InCombat { get; }
     bool IsDead { get; }
 
@@ -44,28 +44,30 @@ public interface ITravelWorld
     /// <summary>Mount roulette.</summary>
     void Mount();
     void Dismount();
-    bool Sprint();
-    void Jump();
 
-    // ── pathing ──
-    bool NavmeshReady { get; }
+    // ── Ariadne ──
 
-    /// <summary>0..1 while the mesh builds, negative when it is not building.</summary>
-    float NavmeshBuildProgress { get; }
+    /// <summary>Ariadne is connected and has this zone's mesh.</summary>
+    bool NavReady { get; }
 
-    /// <summary>The pathing plugin is planning or following a path.</summary>
+    /// <summary>
+    /// Hand Ariadne the point. A range above zero stops within it of the point itself. Flying, Ariadne
+    /// calls the mount when on foot and keeps it at the end. False when Ariadne refused the request.
+    /// </summary>
+    bool MoveTo(Vector3 destination, bool fly, float range);
+
+    /// <summary>A move is under way: pathfinding, a teleport leg, the mount being called, or following.</summary>
     bool IsMoving { get; }
-    bool IsPathfinding { get; }
 
-    /// <summary>Waypoints in the last path; zero after a pathfind reads as "no route".</summary>
-    int PathWaypointCount { get; }
-    bool MoveTo(Vector3 destination, bool fly);
-    bool MoveCloseTo(Vector3 destination, float tolerance, bool fly);
-    bool MoveDirectTo(Vector3 destination, bool fly);
+    /// <summary>How the last move ended, in Ariadne's words ("goal reached", "stuck (4y short)", …).</summary>
+    string MoveResult { get; }
+
     void StopMoving();
-    Vector3? NearestReachablePoint(Vector3 near, float within);
 
-    // ── teleport ──
+    /// <summary>The nearest point Ariadne's mesh reaches, asked off the frame.</summary>
+    Task<Vector3?> NearestReachablePoint(Vector3 near, float within);
+
+    // ── Lifestream ──
 
     /// <summary>The attuned aetheryte in that territory closest to a point, or null when none is attuned.</summary>
     uint? NearestAttunedAetheryte(uint territoryId, Vector3 near);

@@ -123,6 +123,11 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
     /// Point the player at the node. The game's own yaw convention: zero faces south (+Z) and it
     /// turns anticlockwise, which is <c>atan2(dx, dz)</c> rather than the usual <c>atan2(dz, dx)</c>.
     /// </summary>
+    /// <summary>What this character has learned; null knows every action.</summary>
+    public GatheringAbilities? Abilities { get; set; }
+
+    public string? WhyCannotUse(uint actionId) => Abilities?.WhyNot(actionId);
+
     public void FaceDataId(uint dataId)
     {
         try

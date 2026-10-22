@@ -83,6 +83,12 @@ public interface IGatherWorld
 
     void CloseNode();
     void Log(string message);
+
+    /// <summary>
+    /// Why this character cannot use the action — "Collect needs quest "…"" — or null when it can.
+    /// Answered from <see cref="GatheringAbilities"/>; a world without one knows every action.
+    /// </summary>
+    string? WhyCannotUse(uint actionId) => null;
 }
 
 /// <summary>Where a run has got to.</summary>
@@ -362,6 +368,14 @@ public sealed class GatherRunner
         var target = _target!;
         if (_world.CurrentClassJob == target.ClassJobId)
         {
+            // A collectable needs Collect, which a quest teaches, not a level. Finding that out at the
+            // node is a trip wasted — say what is missing before going anywhere.
+            if (_collectability > 0
+                && _world.WhyCannotUse(CollectableRotation.ActionId(GatherMove.Collect, target.ClassJobId)) is { } noCollect)
+            {
+                Fault($"item {_itemId} is wanted as a collectable, and {noCollect}");
+                return;
+            }
             Enter(GatherRunState.Travelling);
             return;
         }
@@ -641,7 +655,15 @@ public sealed class GatherRunner
 
             // Target and floor are both the band asked for — GatherBuddy's own delivery rule:
             // never bank below it, never spend integrity chasing past it.
-            var state = reported with { Target = _collectability, Minimum = _collectability, GpReserve = GpReserve, ScrutinyUsed = _scrutinyUsed };
+            // Only what the character has learned: Meticulous and Scrutiny come with levels and quests,
+            // and a press of an unlearned action does nothing but cost the frame.
+            var job = _target!.ClassJobId;
+            var state = reported with
+            {
+                Target = _collectability, Minimum = _collectability, GpReserve = GpReserve, ScrutinyUsed = _scrutinyUsed,
+                MeticulousYield = _world.WhyCannotUse(CollectableRotation.ActionId(GatherMove.Meticulous, job)) is null ? reported.MeticulousYield : 0,
+                ScrutinyKnown = _world.WhyCannotUse(CollectableRotation.ActionId(GatherMove.Scrutiny, job)) is null,
+            };
             var move = CollectableRotation.Next(state);
             Status = $"Node {_currentNode}: {state.Collectability} of {_collectability}, {state.IntegrityLeft} left, {move}";
 

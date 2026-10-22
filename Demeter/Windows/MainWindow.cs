@@ -5,7 +5,6 @@ using Dalamud.Interface;
 using Dalamud.Interface.Windowing;
 using Demeter.Config;
 using Demeter.Services.Gathering;
-using Demeter.Services.Ipc;
 
 namespace Demeter.Windows;
 
@@ -18,6 +17,8 @@ public sealed record MainWindowDeps(
     ItemGateway Items,
     IOwnGatherer Gatherer,
     Func<uint, string> NameOf,
+    GatheringAbilities Abilities,
+    Func<uint, int> LevelOf,
     Func<string, bool> PluginLoaded,
     Action ToggleLists,
     Action? OpenDebug,
@@ -80,6 +81,7 @@ public sealed class MainWindow : DemeterWindow
             DrawControls();
             DemeterTheme.EndCard();
             DrawDependencies();
+            DrawAbilities();
             DrawSettings();
         }
         finally
@@ -152,8 +154,7 @@ public sealed class MainWindow : DemeterWindow
     private void DrawDependencies()
     {
         DemeterTheme.SectionHeader("NEEDS");
-        var pathing = Cfg.PathingProvider == VnavIpc.AriadneProvider ? "Ariadne" : "vnavmesh";
-        DemeterTheme.DependencyChip(pathing, _d.PluginLoaded(pathing));
+        DemeterTheme.DependencyChip("Ariadne", _d.PluginLoaded("Ariadne"));
         ImGui.SameLine(0f, 14f);
         DemeterTheme.DependencyChip("Lifestream", _d.PluginLoaded("Lifestream"));
         ImGui.SameLine(0f, 14f);
@@ -162,24 +163,44 @@ public sealed class MainWindow : DemeterWindow
             ImGui.SetTooltip("Fights anything that attacks on the way. Without it, travel carries on through a fight.");
     }
 
+    /// <summary>
+    /// Per gathering class: its level and every action still to learn, with what it needs — a level,
+    /// a quest (Inscrutable Tastes opens the collectable actions for all of them), or both. Read off
+    /// the Action sheet, from whichever class is being played.
+    /// </summary>
+    private void DrawAbilities()
+    {
+        if (!ImGui.CollapsingHeader("What's missing"))
+            return;
+        foreach (var job in new[] { GatheringAbilities.Miner, GatheringAbilities.Botanist, GatheringAbilities.Fisher })
+        {
+            var level = _d.LevelOf(job);
+            var missing = _d.Abilities.Missing(job);
+            var label = $"{GatheringAbilities.JobName(job)} — {(level > 0 ? $"Lv {level}" : "not unlocked")}"
+                        + (missing.Count == 0 ? " · nothing missing" : $" · {missing.Count} to learn");
+            if (missing.Count == 0)
+            {
+                ImGui.TextColored(DemeterTheme.StatusGreen, label);
+                continue;
+            }
+            if (!ImGui.TreeNode($"{label}###abilities{job}"))
+                continue;
+            foreach (var m in missing)
+            {
+                // Within level and only a quest away: the actionable ones stand out.
+                var questOnly = level >= m.Ability.Level;
+                ImGui.TextColored(questOnly ? DemeterTheme.StatusYellow : DemeterTheme.TextSecondary, $"{m.Ability.Name} (Lv {m.Ability.Level})");
+                ImGui.SameLine();
+                ImGui.TextColored(DemeterTheme.TextDisabled, $"— needs {m.Missing}");
+            }
+            ImGui.TreePop();
+        }
+    }
+
     private void DrawSettings()
     {
         if (!ImGui.CollapsingHeader("Settings"))
             return;
-
-        ImGui.SetNextItemWidth(140f);
-        if (ImGui.BeginCombo("Pathing", Cfg.PathingProvider))
-        {
-            foreach (var provider in new[] { VnavIpc.VnavmeshProvider, VnavIpc.AriadneProvider })
-                if (ImGui.Selectable(provider, provider == Cfg.PathingProvider))
-                {
-                    Cfg.PathingProvider = provider;
-                    _d.SaveConfig();
-                }
-            ImGui.EndCombo();
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Which plugin walks and flies the character.");
 
         var repair = Cfg.RepairAtPercent;
         ImGui.SetNextItemWidth(140f);

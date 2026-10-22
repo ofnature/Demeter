@@ -41,7 +41,6 @@ public class OdysseusMigrationTests
         Assert.True(read.Lists[1].RemoveCompleted);
         Assert.Equal(GatherHome.FreeCompany, read.Home);
         Assert.Equal(25, read.RepairAtPercent);
-        Assert.Equal("Ariadne", read.PathingProvider);
     }
 
     [Fact]
@@ -51,7 +50,6 @@ public class OdysseusMigrationTests
         Assert.True(OdysseusGatherSettings.MigrateInto(config, OdysseusGatherSettings.Parse(OdysseusJson)));
         Assert.Equal(2, config.GatherLists.Count);
         Assert.Equal(GatherHome.FreeCompany, config.GatherHome);
-        Assert.Equal("Ariadne", config.PathingProvider);
         Assert.True(config.OdysseusListsMigrated);
 
         // Deleted here, never brought back.

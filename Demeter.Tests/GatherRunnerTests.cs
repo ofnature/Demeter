@@ -94,8 +94,11 @@ public class GatherRunnerTests
         /// <summary>A regular node: rows gather directly and no collectable window ever opens.</summary>
         public bool PlainNode { get; set; }
 
+        public int Interacts { get; private set; }
+
         public bool TryInteractWithDataId(uint dataId)
         {
+            Interacts++;
             if (!Spawned.Contains(dataId)) return false;
             if (OpensAt is { } real && Vector3.Distance(real, PlayerPosition) > 5f) return false;
             NodeOpen = true;
@@ -171,6 +174,11 @@ public class GatherRunnerTests
             Collectable = null;
         }
         void IGatherWorld.Log(string message) => Log.Add(message);
+
+        /// <summary>Actions this character has not learned, with the reason the catalogue would give.</summary>
+        public Dictionary<uint, string> Unlearned { get; } = new();
+        string? IGatherWorld.WhyCannotUse(uint actionId) => Unlearned.GetValueOrDefault(actionId);
+
         public void Advance(double seconds)
         {
             UtcNow = UtcNow.AddSeconds(seconds);
@@ -717,5 +725,32 @@ public class GatherRunnerTests
         Run(runner, world);
         Assert.Equal(GatherRunState.Done, runner.State);
         Assert.Equal(4, world.Held);
+    }
+
+    [Fact]
+    public void A_collectable_without_Collect_learned_stops_before_travelling_and_names_the_quest()
+    {
+        var target = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(target);
+        world.Unlearned[240] = "Collect needs quest \"Inscrutable Tastes\"";
+        runner.Begin(target, count: 1, minimumCollectability: 600);
+        Run(runner, world);
+
+        Assert.Equal(GatherRunState.Faulted, runner.State);
+        Assert.Contains("Inscrutable Tastes", runner.FailReason);
+        Assert.Equal(0, world.Interacts);
+    }
+
+    [Fact]
+    public void Without_Scrutiny_learned_it_is_never_pressed()
+    {
+        var target = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(target);
+        world.Unlearned[22185] = "Scrutiny needs Lv 50";
+        runner.Begin(target, count: 1, minimumCollectability: 600);
+        Run(runner, world);
+
+        Assert.Equal(GatherRunState.Done, runner.State);
+        Assert.DoesNotContain(22185u, world.Actions);
     }
 }

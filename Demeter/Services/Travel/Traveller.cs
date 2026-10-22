@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using System.Threading.Tasks;
 
 namespace Demeter.Services.Travel;
 
@@ -25,7 +26,7 @@ public interface ITravel
     /// <summary>
     /// Go to <paramref name="to"/> in <paramref name="territoryId"/>. <paramref name="fly"/> is
     /// "fly if the zone allows it"; <paramref name="land"/> ends the leg on the ground. A stop
-    /// distance of <see cref="Traveller.PointStop"/> means land on the point itself.
+    /// distance of <see cref="Traveller.PointStop"/> means the point itself.
     /// </summary>
     void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop);
 
@@ -34,44 +35,39 @@ public interface ITravel
 }
 
 /// <summary>
-/// Demeter's own travel: open-world only, ticked every frame.
+/// Demeter's travel: a Lifestream teleport into the zone, then the point handed to Ariadne.
 ///
 /// <para>
-/// The gatherer used to borrow Odysseus's quest step executor for this, which does far more —
-/// doors, lifts, gates, the city aethernet, quest mounts, dives, duty handoffs — none of which a
-/// node in a field ever needs. What is here is the part of it gathering exercised, ported with the
-/// lessons that went into it (same author, both AGPL): settle before choosing a route, warm the
-/// aetheryte list before teleporting, ask again when a teleport is swallowed by the action lock,
-/// keep asking for the mount after a loading screen, fly wherever the currents are done, judge a
-/// leg by progress rather than wall time, step between air and ground when the pathfollower wedges,
-/// ride a descent all the way down and reroute one that never lands, and hold still through a fight
-/// Daedalus is having.
+/// Ariadne does the moving — pathfinding, calling the mount and flying, stall recovery, the straight
+/// walk where the mesh stops short — and says how it went (user, 2026-10-22: "use Lifestream to
+/// teleport to the zone, then feed the location to Ariadne"). An earlier cut of this class carried
+/// Odysseus's own wedge ladder, stall hops and off-mesh nudges; with Ariadne underneath they were a
+/// second opinion fighting the first, and they went.
 /// </para>
 ///
 /// <para>
-/// Cross-zone travel is ours, not the pathing plugin's: Ariadne and vnavmesh move within a zone,
-/// and getting to the zone is a Lifestream teleport to the attuned aetheryte nearest the point.
+/// What stays ours is what Ariadne leaves to the caller: getting into the zone (cross-zone travel is
+/// the consumer's job), the mount for a long ride on the ground (it only calls one to fly), coming
+/// off the mount at the end of a flight (it keeps the mount when the caller asked to fly) — including
+/// a descent onto a ledge that never touches down — and holding still while Daedalus fights.
 /// </para>
 /// </summary>
 public sealed class Traveller : ITravel
 {
     private enum Phase { None, Settle, Teleport, TeleportWait, Mount, Move, Land }
 
-    /// <summary>Land on the point itself (vnavmesh's own arrival, not a radius around it).</summary>
+    /// <summary>The point itself: Ariadne's own arrival, not a radius around it.</summary>
     public const float PointStop = 0.5f;
 
     /// <summary>How close "arrived" is for a stop that is not the point itself.</summary>
     public const float DefaultStopDistance = 3f;
 
-    /// <summary>
-    /// The pathing plugin declares arrival by its own tolerance and can stop a hair outside ours;
-    /// without slack the leg would re-path three times over half a yalm and then fail.
-    /// </summary>
+    /// <summary>Ariadne declares arrival by its own measure and can stop a hair outside ours.</summary>
     public const float ArrivalSlack = 1.5f;
 
     /// <summary>
-    /// Close enough for a keypress to land on a node. Measured in three dimensions, because the
-    /// way this fails is vertical — the walk finishes on a lip above it.
+    /// Close enough for a keypress to land on a node. Measured in three dimensions, because the way
+    /// this fails is vertical — the walk finishes on a lip above it.
     /// </summary>
     public const float InteractReach = 3.5f;
 
@@ -81,63 +77,42 @@ public sealed class Traveller : ITravel
     /// <summary>And it has to win by this much — a teleport is a cast and a loading screen.</summary>
     private const float TeleportMargin = 200f;
 
-    /// <summary>Distances past this are worth a mount.</summary>
+    /// <summary>A ride on the ground this long is worth a mount (Ariadne only calls one to fly).</summary>
     public const float MountWorthDistance = 30f;
 
-    private const float SprintWorthDistance = 25f;
-
-    /// <summary>A leg given up on this close to its point is taken as arrived rather than failed.</summary>
+    /// <summary>A move that ends "closest reachable point" this near is arrival.</summary>
     private const float NearEnough = 5f;
 
-    /// <summary>The most that is walked blind from the mesh's nearest point to the destination.</summary>
-    private const float OffMeshDirectMax = 15f;
-
-    /// <summary>How far around an off-mesh destination to look for a point the mesh does reach.</summary>
-    private const float OffMeshSnapRange = 10f;
-
-    /// <summary>Closing this much counts as progress; anything less is standing still.</summary>
-    private const float StallProgress = 0.5f;
-
-    /// <summary>Moving this far in the stall window is not a stall, whatever the straight-line distance does.</summary>
-    private const float StallMoveProgress = 2.5f;
-    private const int MaxMoveRetries = 3;
-    private const int MaxFrozenStops = 6;
-    private const int MaxTeleportAsks = 2;
+    /// <summary>Attempts at one leg before it fails, the air tried last where it is open.</summary>
+    private const int MaxMoves = 3;
 
     private static readonly TimeSpan SettleGrace = TimeSpan.FromSeconds(1);
-
-    /// <summary>A conversation left hanging is not worth waiting on forever; cutscenes hold this clock.</summary>
     private static readonly TimeSpan SettleMax = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ReadyWait = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan AetheryteWarmup = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan TeleportRetryEvery = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan TeleportGiveUp = TimeSpan.FromSeconds(12);
-
-    /// <summary>A teleport that took goes travel-busy within a second or two; past this, it did not.</summary>
     private static readonly TimeSpan TeleportStartGrace = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan TravelStart = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TravelMax = TimeSpan.FromSeconds(90);
+    private const int MaxTeleportAsks = 2;
 
     /// <summary>
-    /// How long to keep asking for a mount before walking instead. Longer than it looks like it
-    /// needs to be: the seconds after a teleport are a lock, and a mount asked for inside it is
-    /// dropped without a word.
+    /// How long to keep asking for a mount before walking instead. The seconds after a teleport are
+    /// a lock, and a mount asked for inside it is dropped without a word.
     /// </summary>
     private static readonly TimeSpan MountWait = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan MountRetry = TimeSpan.FromSeconds(2);
 
-    /// <summary>A leg that stops closing for this long fails; every ten yalms gained buys it back.</summary>
+    /// <summary>A zone just loaded may not have its mesh yet; Ariadne's answers in ~0.1 s, this is the backstop.</summary>
+    private static readonly TimeSpan NavWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>How long Ariadne gets to say it has started, and to stop refusing a move.</summary>
+    private static readonly TimeSpan MoveStartGrace = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MoveRefusedMax = TimeSpan.FromSeconds(10);
+
+    /// <summary>A leg that stops closing for this long is stopped; every ten yalms gained buys it back.</summary>
     private static readonly TimeSpan MoveTotal = TimeSpan.FromSeconds(180);
-    private static readonly TimeSpan MoveStall = TimeSpan.FromSeconds(8);
-
-    /// <summary>How long a pathfind is given to answer before the attempt is judged.</summary>
-    private static readonly TimeSpan PathSettle = TimeSpan.FromSeconds(2);
-
-    /// <summary>"Moving" with the position frozen this long is a wedge, not a walk.</summary>
-    private static readonly TimeSpan FrozenStallLimit = TimeSpan.FromSeconds(12);
-    private static readonly TimeSpan StallJumpAfter = TimeSpan.FromSeconds(4);
-    private static readonly TimeSpan StallJumpGap = TimeSpan.FromSeconds(8);
-    private static readonly TimeSpan SprintRetry = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan DismountRetry = TimeSpan.FromSeconds(2);
 
     /// <summary>The mounted flag clears before the animation ends, and a press in that gap is eaten.</summary>
@@ -165,35 +140,25 @@ public sealed class Traveller : ITravel
     private bool _sawTravelBusy;
     private DateTime _settledSince;
 
+    // Move
+    private bool _issued;
+    private DateTime _issuedAt;
+    private bool _issuedFly;
+    private int _moves;
+    private bool _airTried;
+    private float _bestDistance;
+    private DateTime _lastProgress;
+
+    /// <summary>The reroute over a descent that never lands.</summary>
+    private Vector3? _detourTo;
+
     // Mount / land
     private DateTime _lastMountTry;
     private DateTime _lastDismountTry;
     private DateTime _dismountedAt;
     private bool _descentRerouted;
-
-    /// <summary>A detour inside the move — the reroute over a descent with no floor.</summary>
-    private Vector3? _detourTo;
-
-    // Move
-    private DateTime _lastMoveIssue;
-    private int _moveRetries;
-    private float _bestDistance;
-    private DateTime _lastProgress;
-    private Vector3 _frozenAt;
-    private DateTime _frozenSince;
-    private int _frozenStops;
-    private bool _groundFallback;
-    private bool _airFallback;
-    private bool _lastIssuedFly;
-    private bool _landedToFinish;
-    private float _closestSeen;
-    private DateTime _stalledSince;
-    private Vector3 _stallAnchor;
-    private DateTime _lastStallJump;
-    private int _stallJumps;
-    private DateTime _lastSprintTry;
-    private bool _offMeshNudged;
-    private Vector3? _offMeshSnap;
+    private Task<Vector3?>? _floorQuery;
+    private bool _landThenMove;
 
     // Fight
     private bool _heldForFight;
@@ -219,13 +184,12 @@ public sealed class Traveller : ITravel
         _listWarmed = false;
         _settledSince = default;
         _descentRerouted = false;
+        _floorQuery = null;
         _detourTo = null;
         _heldForFight = false;
         _fightDismounted = false;
-        _groundFallback = false;
-        _airFallback = false;
-        _landedToFinish = false;
-        _frozenStops = 0;
+        _moves = 0;
+        _airTried = false;
         FailReason = string.Empty;
         Status = TravelStatus.Running;
         Enter(Phase.Settle);
@@ -304,7 +268,8 @@ public sealed class Traveller : ITravel
         }
 
         // Same zone and a long way off, with an attuned aetheryte standing near the point: the
-        // crystal beats even the flight — when it wins by a clear margin.
+        // crystal beats even the flight — when it wins by a clear margin. (Ariadne can plan teleport
+        // legs itself, but only with its session switch on, and that switch is every consumer's.)
         var away = Vector3.Distance(here, _to);
         if (away > TeleportWorthDistance
             && _world.NearestAttunedAetheryte(_territory, _to) is { } near
@@ -324,13 +289,16 @@ public sealed class Traveller : ITravel
         var distance = Vector3.Distance(_world.PlayerPosition, _to);
         if (distance <= _stop + ArrivalSlack)
             return Arrive();
-        if (distance > MountWorthDistance && _world.CanMountHere && !_world.IsMounted)
+        // Ariadne calls the mount for a flight; a long ride on the ground is ours to mount for.
+        if (!WillFly && distance > MountWorthDistance && _world.CanMountHere && !_world.IsMounted)
         {
-            _lastMountTry = default;   // the phase does the asking, and keeps asking
+            _lastMountTry = default;
             return Phase.Mount;
         }
         return Phase.Move;
     }
+
+    private bool WillFly => (_fly || _airTried) && _world.CanFlyHere;
 
     private void TickTeleport(DateTime now)
     {
@@ -375,8 +343,8 @@ public sealed class Traveller : ITravel
         var arrived = _world.TerritoryId == _territory && !_world.IsTravelBusy && _world.IsReady;
 
         // Lifestream said yes and nothing happened: the cast fell into the action lock a gearset
-        // change leaves behind. Ask again before believing it — the gather lists faulted every
-        // item this way in Odysseus before this was there.
+        // change leaves behind. Ask again before believing it — the gather lists faulted every item
+        // this way in Odysseus before this was there.
         if (!_sawTravelBusy && !_world.IsTravelBusy && _world.TerritoryId != _territory
             && now - _phaseStart > TeleportStartGrace && _teleportAsks < MaxTeleportAsks)
         {
@@ -412,8 +380,6 @@ public sealed class Traveller : ITravel
             Enter(Phase.Move); // mounted, or long enough — walking is always an option
             return;
         }
-        // Asked here rather than once on the way in: the request only lands when the character can
-        // act, and after a teleport that is not straight away.
         if (_world.IsReady && !_world.InCombat && now - _lastMountTry >= MountRetry)
         {
             _lastMountTry = now;
@@ -424,10 +390,9 @@ public sealed class Traveller : ITravel
     /// <summary>
     /// A fight on the way — a mob that took a swing at the node circuit, a FATE spilling over.
     /// Daedalus finishes it (Demeter's busy gate is what tells it to) and that moves the character,
-    /// so every walk issued meanwhile would be cut off and counted as a failure. Hold every clock,
-    /// get off the mount (nobody fights from the saddle), and carry on when it is over — remounting
-    /// if the fight took us off. Daedalus switched off means nobody fights: then moving on is the
-    /// better answer, and nothing holds.
+    /// so a move left running would pull against it. Stop, get off the mount (nobody fights from the
+    /// saddle), hold every clock, and hand Ariadne the point again when it is over. Daedalus switched
+    /// off means nobody fights: then moving on is the better answer, and nothing holds.
     /// </summary>
     private bool HoldForFight(DateTime now)
     {
@@ -436,8 +401,7 @@ public sealed class Traveller : ITravel
             if (!_heldForFight)
             {
                 _heldForFight = true;
-                if (_world.IsMoving)
-                    _world.StopMoving();
+                _world.StopMoving();
                 _world.Log("In combat on the way — waiting for it to end, then going on.");
             }
             if (_world.IsMounted && now - _lastFightDismount > DismountRetry)
@@ -448,9 +412,8 @@ public sealed class Traveller : ITravel
                 _world.Dismount();
             }
             _phaseStart = now;
-            _lastMoveIssue = default;
             _lastProgress = now;
-            _stalledSince = default;
+            _issued = false;   // the move is asked for again afterwards
             return true;
         }
         if (!_heldForFight)
@@ -458,7 +421,7 @@ public sealed class Traveller : ITravel
 
         _heldForFight = false;
         var left = Vector3.Distance(_world.PlayerPosition, _to);
-        var remount = _phase == Phase.Move && (_fightDismounted || left > MountWorthDistance)
+        var remount = _phase == Phase.Move && !WillFly && (_fightDismounted || left > MountWorthDistance)
                       && _world.CanMountHere && !_world.IsMounted;
         _fightDismounted = false;
         _world.Log(remount ? "Out of combat — mounting up and going on." : "Out of combat — going on.");
@@ -475,7 +438,6 @@ public sealed class Traveller : ITravel
         if (_world.IsOccupied)
         {
             _phaseStart = now;
-            _lastMoveIssue = now;
             _lastProgress = now;
             return;
         }
@@ -485,31 +447,59 @@ public sealed class Traveller : ITravel
         var tolerance = detour is null ? _stop : InteractReach - ArrivalSlack;
         var distance = Vector3.Distance(_world.PlayerPosition, target);
 
-        if (_stalledSince == default)
+        if (!_issued)
         {
-            _stalledSince = now;
-            _closestSeen = distance;
-            _stallAnchor = _world.PlayerPosition;
-        }
-
-        // A flight that ends hanging over its point never arrives: the point's own Y is the ground.
-        // Horizontally there and above it — come down, then judge from the ground.
-        if (detour is null && _world.IsInFlight && _world.PlayerPosition.Y > target.Y
-            && Vector3.Distance(target with { Y = _world.PlayerPosition.Y }, _world.PlayerPosition) <= tolerance + ArrivalSlack
-            && distance > tolerance + ArrivalSlack)
-        {
-            _world.StopMoving();
-            _world.Log($"The flight ended {_world.PlayerPosition.Y - target.Y:F0}y above {Fmt(target)} — landing.");
-            BeginLand();
+            if (!_world.NavReady)
+            {
+                if (now - _phaseStart > NavWait)
+                    Fail("Ariadne has no mesh for this zone — is it loaded?");
+                return;
+            }
+            var fly = detour is not null ? _world.IsMounted : WillFly;
+            if (!_world.MoveTo(target, fly, tolerance > PointStop ? tolerance : 0f))
+            {
+                if (now - _phaseStart > MoveRefusedMax)
+                    Fail($"Ariadne kept refusing the move to {Fmt(target)} — {_world.MoveResult}");
+                return;
+            }
+            _issued = true;
+            _issuedAt = now;
+            _issuedFly = fly;
+            _moves++;
+            _bestDistance = distance;
+            _lastProgress = now;
             return;
         }
 
-        if (distance <= tolerance + ArrivalSlack)
+        if (_world.IsMoving || now - _issuedAt < MoveStartGrace)
         {
-            _world.StopMoving();
+            // The budget measures progress, not wall time: a long crossing still closing is not stuck.
+            if (distance < _bestDistance - 10f)
+            {
+                _bestDistance = distance;
+                _lastProgress = now;
+            }
+            if (now - _lastProgress > MoveTotal)
+            {
+                _world.StopMoving();
+                Fail($"no progress toward {Fmt(target)} for {MoveTotal.TotalSeconds:F0}s ({distance:F1}y left) — Ariadne: {_world.MoveResult}");
+            }
+            return;
+        }
+
+        // Ariadne has finished: judge where it left us, then what it said.
+        var result = _world.MoveResult;
+        _issued = false;
+
+        // A flight that ends hanging over the point: horizontally there, above it — come down.
+        var overhead = _world.IsInFlight && _world.PlayerPosition.Y > target.Y
+                       && Vector3.Distance(target with { Y = _world.PlayerPosition.Y }, _world.PlayerPosition) <= tolerance + ArrivalSlack;
+        if (distance <= tolerance + ArrivalSlack || overhead
+            || result.StartsWith("goal reached", StringComparison.OrdinalIgnoreCase)
+            || (result.StartsWith("closest reachable point", StringComparison.OrdinalIgnoreCase) && distance <= NearEnough))
+        {
             if (detour is not null)
             {
-                // The reroute over a floorless descent: on to the landing again from here.
                 _detourTo = null;
                 BeginLand();
                 return;
@@ -518,198 +508,33 @@ public sealed class Traveller : ITravel
             return;
         }
 
-        // The budget measures progress, not wall time: a long crossing still closing is not stuck.
-        if (distance < _bestDistance - 10f)
+        if (result.StartsWith("zone changed", StringComparison.OrdinalIgnoreCase))
         {
-            _bestDistance = distance;
-            _lastProgress = now;
-        }
-        if (now - _lastProgress > MoveTotal)
-        {
-            Fail($"no progress toward {Fmt(target)} for {MoveTotal.TotalSeconds:F0}s ({distance:F1}y left)");
+            Enter(Phase.Settle);
             return;
         }
 
-        if (!_world.NavmeshReady)
+        // The player took the keys: that is theirs to decide, not ours to fight.
+        if (result.StartsWith("stopped", StringComparison.OrdinalIgnoreCase))
         {
-            // A mesh still building is a wait, not a fault: a fresh zone takes far longer than the
-            // stall clock, which is there for a mesh that is not coming at all.
-            if (_world.NavmeshBuildProgress >= 0f)
-            {
-                _phaseStart = now;
-                _lastProgress = now;
-                return;
-            }
-            if (now - _phaseStart > MoveStall)
-                Fail("the navmesh is not ready — is vnavmesh (or Ariadne) loaded?");
+            Fail($"the move to {Fmt(target)} was stopped (keys pressed?)");
             return;
         }
 
-        if (_world.IsMoving)
+        // Stuck, no path, or short of a point the mesh will not reach. Ariadne has already re-pathed
+        // on its own; one more ask from where it gave up, then the air where the zone allows it.
+        if (_moves < MaxMoves - 1)
         {
-            TickWhileMoving(now, target, distance);
+            _world.Log($"Ariadne: {result} — {distance:F1}y from {Fmt(target)}; asking again.");
             return;
         }
-
-        // Not moving and not there: either we have not asked yet, or the path ended short.
-        if (_lastMoveIssue != default && now - _lastMoveIssue < PathSettle)
-            return;
-
-        var fly = (_fly || _airFallback) && !_groundFallback && _world.CanFlyHere && _world.IsMounted
-                  || (detour is not null && _world.IsMounted);
-        _lastIssuedFly = fly;
-
-        // The mesh answered nothing. A point simply off the mesh — a node on a rock the mesh
-        // disowns — is reached by walking the last stretch blind, or by going to the nearest
-        // point the mesh reaches and walking the rest.
-        if (_moveRetries > 0 && _world.PathWaypointCount == 0)
+        if (!_issuedFly && !_airTried && _world.CanFlyHere)
         {
-            if (!_offMeshNudged && distance <= OffMeshDirectMax)
-            {
-                _offMeshNudged = true;
-                _lastMoveIssue = now;
-                _world.Log($"Walking the last {distance:F1}y to {Fmt(target)} directly — the mesh gave no path.");
-                _world.MoveDirectTo(target, false);
-                return;
-            }
-            if (_offMeshSnap is null
-                && _world.NearestReachablePoint(target, OffMeshSnapRange) is { } snap
-                && Vector3.Distance(snap, target) > ArrivalSlack
-                && Vector3.Distance(snap, _world.PlayerPosition) > ArrivalSlack)
-            {
-                _offMeshSnap = snap;
-                _lastMoveIssue = now;
-                _world.Log($"{Fmt(target)} is off the mesh; going to the nearest point it reaches ({Vector3.Distance(snap, target):F1}y short).");
-                _world.MoveTo(snap, fly);
-                return;
-            }
-        }
-
-        if (_moveRetries >= MaxMoveRetries)
-        {
-            // Giving up while still in the air is premature: a hover is fat and snags on lips a
-            // walker slips past. Land once, within the last stretch, and try again on foot.
-            if (_world.IsInFlight && !_landedToFinish && detour is null && distance <= OffMeshDirectMax)
-            {
-                _landedToFinish = true;
-                _groundFallback = true;
-                _world.Log($"Still in flight {distance:F1}y from {Fmt(target)} — landing to finish on foot.");
-                BeginLand(thenMove: true);
-                return;
-            }
-            if (detour is null && distance <= NearEnough)
-            {
-                _world.Log($"Ended {distance:F1}y short of {Fmt(target)} and can get no closer — near enough.");
-                _world.StopMoving();
-                Enter(Arrive());
-                return;
-            }
-            // The ground has no route: the air may. One leg, not the run.
-            if (!_airFallback && _world.CanFlyHere)
-            {
-                _airFallback = true;
-                _groundFallback = false;
-                _moveRetries = 0;
-                _world.Log($"The ground has no route to {Fmt(target)} — flying this leg.");
-                Enter(_world.IsMounted ? Phase.Move : Phase.Mount);
-                return;
-            }
-            Fail(_world.PathWaypointCount == 0
-                ? $"no path to {Fmt(target)} after {_moveRetries} attempts{MeshDiagnosis(target)}"
-                : $"stalled {_moveRetries} times short of {Fmt(target)} ({distance:F1}y left)");
+            _airTried = true;
+            _world.Log($"Ariadne: {result} on the ground — flying this leg.");
             return;
         }
-
-        var ok = tolerance > PointStop
-            ? _world.MoveCloseTo(target, tolerance, fly)
-            : _world.MoveTo(target, fly);
-        _lastMoveIssue = now;
-        _moveRetries++;
-        if (!ok)
-            _world.Log($"Move to {Fmt(target)} refused (attempt {_moveRetries}).");
-    }
-
-    private void TickWhileMoving(DateTime now, Vector3 target, float distance)
-    {
-        // Moving in name only: the pathfollower can wedge against geometry with the position frozen
-        // to the yalm. Hand the leg to the other medium — the volume path snags on rooflines and
-        // branches the walk beneath slips under, and the reverse. The epsilon beats a jump's bob.
-        if (Vector3.Distance(_world.PlayerPosition, _frozenAt) > 2.5f
-            || _world.IsPathfinding || _world.IsCasting || _world.IsTravelBusy)
-        {
-            _frozenAt = _world.PlayerPosition;
-            _frozenSince = now;
-        }
-        else if (_frozenSince != default && now - _frozenSince > FrozenStallLimit)
-        {
-            if (++_frozenStops > MaxFrozenStops)
-            {
-                Fail($"the leg keeps wedging near {Fmt(_world.PlayerPosition)} — {_frozenStops} re-paths went nowhere toward {Fmt(target)}");
-                return;
-            }
-            if (_lastIssuedFly && !_groundFallback)
-            {
-                _groundFallback = true;
-                _world.Log($"The flight is wedged at {Fmt(_world.PlayerPosition)} — trying this leg on the ground.");
-            }
-            else if (!_lastIssuedFly && _world.CanFlyHere)
-            {
-                _groundFallback = false;
-                _airFallback = true;
-                _world.Log($"The walk is wedged at {Fmt(_world.PlayerPosition)} — trying this leg in the air.");
-            }
-            else
-                _world.Log($"Moving without moving at {Fmt(_world.PlayerPosition)} — stopping and re-pathing.");
-            _world.StopMoving();
-            _frozenSince = now;
-            _lastMoveIssue = default;
-            if (_airFallback && !_groundFallback && !_world.IsMounted && _world.CanMountHere)
-                Enter(Phase.Mount);
-            return;
-        }
-        _lastMoveIssue = now;
-
-        // No mount allowed here: Sprint is the fastest thing going.
-        if (!_world.IsMounted && !_world.CanMountHere && distance > SprintWorthDistance && now - _lastSprintTry > SprintRetry)
-        {
-            _lastSprintTry = now;
-            _world.Sprint();
-        }
-
-        // Moving but not getting anywhere — caught on the lip of something. A jump clears most of
-        // it. Never while the pathing plugin plans or a cast runs (that is busy, not stuck), never
-        // from the saddle in the air, and three hops that gain nothing hand it to the re-path.
-        if (_world.IsCasting || _world.IsTravelBusy || _world.IsPathfinding)
-        {
-            _stalledSince = now;
-            _stallAnchor = _world.PlayerPosition;
-            return;
-        }
-        var moved = Vector3.Distance(_world.PlayerPosition, _stallAnchor) > StallMoveProgress;
-        if (distance < _closestSeen - StallProgress || moved)
-        {
-            if (distance < _closestSeen) _closestSeen = distance;
-            _stallAnchor = _world.PlayerPosition;
-            _stalledSince = now;
-            _stallJumps = 0;
-        }
-        else if (now - _stalledSince > StallJumpAfter && now - _lastStallJump > StallJumpGap
-                 && distance > 10f && !_world.IsInFlight && _world.CanMountHere)
-        {
-            _lastStallJump = now;
-            _stalledSince = now;
-            if (++_stallJumps >= 3)
-            {
-                _stallJumps = 0;
-                _moveRetries++;
-                _world.Log($"Three hops gained nothing toward {Fmt(target)} ({distance:F1}y) — stopping and re-pathing.");
-                _world.StopMoving();
-                _lastMoveIssue = default;
-                return;
-            }
-            _world.Log($"Not getting any closer to {Fmt(target)} ({distance:F1}y) — jumping.");
-            _world.Jump();
-        }
+        Fail($"Ariadne could not reach {Fmt(target)}: {result} ({distance:F1}y left)");
     }
 
     private Phase Arrive()
@@ -722,8 +547,6 @@ public sealed class Traveller : ITravel
         Status = TravelStatus.Done;
         return Phase.None;
     }
-
-    private bool _landThenMove;
 
     private void BeginLand(bool thenMove = false)
     {
@@ -744,7 +567,10 @@ public sealed class Traveller : ITravel
         if (_world.IsMounted && _world.IsInFlight && !_descentRerouted && _world.CanFlyHere
             && now - _phaseStart > BlockedDescentAfter && Vector3.Distance(_to, _world.PlayerPosition) > 0.5f)
         {
-            var floor = _world.NearestReachablePoint(_to, 8f) ?? _to;
+            _floorQuery ??= _world.NearestReachablePoint(_to, 8f);
+            if (!_floorQuery.IsCompleted)
+                return;
+            var floor = _floorQuery.Status == TaskStatus.RanToCompletion && _floorQuery.Result is { } f ? f : _to;
             _descentRerouted = true;
             _world.Log($"The descent is not landing (at {Fmt(_world.PlayerPosition)}) — flying over {Fmt(floor)} to come down on its floor.");
             _detourTo = floor;
@@ -780,19 +606,6 @@ public sealed class Traveller : ITravel
             Fail($"could not get off the mount (at {Fmt(_world.PlayerPosition)}, {(_world.IsInFlight ? "in flight" : "on the ground")})");
     }
 
-    /// <summary>
-    /// Why the mesh gave nothing. A mesh that does not cover where we stand is stale (a rebuild
-    /// fixes it); a destination nothing reaches is the data's.
-    /// </summary>
-    private string MeshDiagnosis(Vector3 target)
-    {
-        if (_world.NearestReachablePoint(_world.PlayerPosition, 3f) is null)
-            return " — the loaded navmesh does not cover where you stand, so it is probably stale: /vnav rebuild";
-        if (_world.NearestReachablePoint(target, 3f) is null)
-            return " — the point is off the mesh";
-        return string.Empty;
-    }
-
     private void Enter(Phase phase)
     {
         if (phase == Phase.None)
@@ -800,17 +613,7 @@ public sealed class Traveller : ITravel
         _phase = phase;
         _phaseStart = _world.UtcNow;
         if (phase == Phase.Move)
-        {
-            _lastMoveIssue = default;
-            _moveRetries = 0;
-            _bestDistance = float.MaxValue;
-            _lastProgress = _world.UtcNow;
-            _stalledSince = default;
-            _stallJumps = 0;
-            _offMeshSnap = null;
-            _offMeshNudged = false;
-            _frozenSince = default;
-        }
+            _issued = false;
     }
 
     private TravelStatus Fail(string reason)

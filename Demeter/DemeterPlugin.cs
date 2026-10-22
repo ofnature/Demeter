@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -7,6 +8,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Demeter.Config;
+using Demeter.Services.Fishing;
 using Demeter.Services.Game;
 using Demeter.Services.Gathering;
 using Demeter.Services.Ipc;
@@ -38,7 +40,6 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
     private readonly WindowSystem _windowSystem = new("Demeter");
     private readonly DemeterConfig _config = null!;
-    private readonly VnavIpc _vnav = null!;
     private readonly GameBasics _game = null!;
     private readonly OwnGatherer _gatherer = null!;
     private readonly GatherListRunner _lists = null!;
@@ -48,6 +49,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly MainWindow _mainWindow = null!;
     private readonly GatherListsWindow _listsWindow = null!;
     private readonly DebugWindow? _debugWindow;
+    private readonly FishWindow _fishWindow = null!;
+    private readonly HoleApproach _approach = null!;
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
@@ -73,15 +76,21 @@ public sealed class DemeterPlugin : IDalamudPlugin
             }
             DemeterTheme.SetMode(_config.Theme);
 
-            _vnav = new VnavIpc(PluginInterface, message => Warn(message)) { Provider = _config.PathingProvider };
             var aetherytes = new AetheryteCatalog(DataManager, message => Warn(message));
-            _game = new GameBasics(ClientState, ObjectTable, Condition, GameGui, DataManager, _vnav,
+            _game = new GameBasics(ClientState, ObjectTable, Condition, GameGui, DataManager,
+                new AriadneIpc(PluginInterface, message => Warn(message)),
                 new LifestreamIpc(PluginInterface, message => Warn(message)),
                 new DaedalusIpc(PluginInterface), aetherytes,
                 new ChatCommandSender(message => Warn(message)),
                 message => Say(message));
 
-            var gatherWorld = new GameGatherWorld(ClientState, ObjectTable, Condition, GameGui, _game, message => Say(message));
+            // What the character has learned, from the Action sheet: nothing is pressed that is not, and
+            // the main window says what each class still lacks and which quest teaches it.
+            var abilities = new GatheringAbilities(GameAbilityCatalog.Read(DataManager, message => Warn(message)), _game);
+            var gatherWorld = new GameGatherWorld(ClientState, ObjectTable, Condition, GameGui, _game, message => Say(message))
+            {
+                Abilities = abilities,
+            };
             var source = new GatheringSource(DataManager, message => Warn(message));
             var atlas = new NodeAtlas(NodeAtlas.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
             _gatherer = new OwnGatherer(new GatherRunner(gatherWorld, new Traveller(_game)), source, atlas, message => Say(message))
@@ -110,13 +119,23 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning,
                 message => Say(message));
 
+            // Fishing, phase 1: what is known about every fish, and when each can next be caught.
+            var fish = FishCatalog.Load(FishCatalog.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
+            // Phase 2: getting to a hole — the community's recorded stand points, Lifestream and Ariadne
+            // to get there, a test cast to prove it, and what worked remembered per hole.
+            var holes = FishingHoles.Load(FishingHoles.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
+            _approach = new HoleApproach(new GameFishingWorld(_game, gatherWorld, ObjectTable, Condition, message => Say(message)),
+                new Traveller(_game), SaveConfig);
+            _fishWindow = new FishWindow(fish, new FishSpots(DataManager, message => Warn(message)), holes, _approach,
+                GoToHole, () => _lists.State == GatherListRunState.Running || _items.IsRunning);
+
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning);
 #if DEBUG
             _debugWindow = new DebugWindow(_gatherer, gatherWorld);
 #endif
             _mainWindow = new MainWindow(new MainWindowDeps(
-                _config, SaveConfig, _lists, _gateway, _items, _gatherer, gatherables.NameOf,
+                _config, SaveConfig, _lists, _gateway, _items, _gatherer, gatherables.NameOf, abilities, _game.LevelOfJob,
                 PluginLoaded, ToggleLists,
                 _debugWindow is null ? null : () => _debugWindow.IsOpen = true,
                 StopAll));
@@ -125,6 +144,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
             _windowSystem.AddWindow(_mainWindow);
             _windowSystem.AddWindow(_listsWindow);
+            _windowSystem.AddWindow(_fishWindow);
             if (_debugWindow is not null)
                 _windowSystem.AddWindow(_debugWindow);
 
@@ -152,7 +172,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
             CommandManager.AddHandler(CommandMain, new CommandInfo(OnCommand)
             {
-                HelpMessage = "Open Demeter. \"/demeter lists\" the gather lists, \"/demeter stop\" stops gathering"
+                HelpMessage = "Open Demeter. \"/demeter lists\" the gather lists, \"/demeter fish\" when and how a fish is caught, \"/demeter stop\" stops gathering"
 #if DEBUG
                               + ", \"/demeter debug\" the gathering probes"
 #endif
@@ -231,12 +251,23 @@ public sealed class DemeterPlugin : IDalamudPlugin
     }
 
     /// <summary>Anything Demeter is driving — what <c>Demeter.IsBusy</c> answers, and what Daedalus fights for.</summary>
-    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning);
+    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy);
+
+    /// <summary>The Fish window's "Go there": Fisher on, to the hole, a test cast, reeled in.</summary>
+    private void GoToHole(FishingHole hole, IReadOnlyList<StandPoint> recorded)
+    {
+        if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy)
+            return;
+        if (!_config.HoleMemory.TryGetValue(hole.Id, out var memory))
+            _config.HoleMemory[hole.Id] = memory = new HoleMemory();
+        _approach.KeepFishing = false;
+        _approach.Begin(hole, recorded, memory);
+        Say($"Going to {hole.Name} ({hole.ZoneName}) to prove a stand point.");
+    }
 
     private void OnFrameworkUpdate(IFramework framework)
     {
         _gatherer.Enabled = _config.Enabled;
-        _vnav.Provider = _config.PathingProvider;
 
         if (!_config.Enabled)
         {
@@ -245,6 +276,12 @@ public sealed class DemeterPlugin : IDalamudPlugin
         }
 
         // A single item for a caller that drives its own flow (Odysseus).
+        if (_approach.Busy)
+        {
+            _approach.Tick();
+            return;
+        }
+
         if (_items.IsRunning)
         {
             _items.Tick();
@@ -291,6 +328,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
     private void StopAll()
     {
+        if (_approach.Busy)
+            _approach.Cancel();
         _gateway.Stop();
         if (_lists.State == GatherListRunState.Running)
             _lists.Stop();
@@ -304,6 +343,9 @@ public sealed class DemeterPlugin : IDalamudPlugin
             case "lists":
             case "gather":
                 _listsWindow.IsOpen = true;
+                break;
+            case "fish":
+                _fishWindow.IsOpen = true;
                 break;
             case "stop":
                 StopAll();

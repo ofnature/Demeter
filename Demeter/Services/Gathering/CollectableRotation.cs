@@ -29,9 +29,10 @@ public enum GatherMove
 /// <param name="ScourYield">What the window says a Scour is worth here; 0 when not read.</param>
 /// <param name="MeticulousYield">What the window says a Meticulous is worth; 0 when not read.</param>
 /// <param name="Minimum">The floor worth banking at all — for a delivery, the same as the target.</param>
+/// <param name="ScrutinyKnown">The character has learned Scrutiny. Meticulous unlearned reads as a zero yield.</param>
 public readonly record struct CollectableState(
     int Collectability, int Target, int IntegrityLeft, int Gp, bool ScrutinyUsed, int GpReserve = 0,
-    int ScourYield = 0, int MeticulousYield = 0, int Minimum = 0);
+    int ScourYield = 0, int MeticulousYield = 0, int Minimum = 0, bool ScrutinyKnown = true);
 
 /// <summary>
 /// Which collectable action to use next.
@@ -91,7 +92,7 @@ public static class CollectableRotation
 
         // Nothing finishes from here: Scrutiny while the GP lasts, then Meticulous as the raise —
         // its free-integrity procs are what stretch a node, and integrity is items.
-        if (!state.ScrutinyUsed && state.Gp - ScrutinyCost >= state.GpReserve)
+        if (state.ScrutinyKnown && !state.ScrutinyUsed && state.Gp - ScrutinyCost >= state.GpReserve)
             return GatherMove.Scrutiny;
 
         return state.MeticulousYield > 0 ? GatherMove.Meticulous : GatherMove.Scour;

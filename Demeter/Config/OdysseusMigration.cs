@@ -15,7 +15,7 @@ namespace Demeter.Config;
 /// skipped. Odysseus's copy is left exactly as it was — it drops the fields in its own time.
 /// </para>
 /// </summary>
-public sealed record OdysseusGatherSettings(List<GatherList> Lists, GatherHome? Home, int? RepairAtPercent, string? PathingProvider)
+public sealed record OdysseusGatherSettings(List<GatherList> Lists, GatherHome? Home, int? RepairAtPercent)
 {
     /// <summary>
     /// <c>pluginConfigs/Odysseus.json</c>, the sibling of Demeter's own config directory
@@ -69,7 +69,7 @@ public sealed record OdysseusGatherSettings(List<GatherList> Lists, GatherHome? 
             }
 
             GatherHome? home = Int(root, "GatherHome") is { } h && Enum.IsDefined(typeof(GatherHome), h) ? (GatherHome)h : null;
-            return new OdysseusGatherSettings(lists, home, Int(root, "RepairAtPercent"), Str(root, "PathingProvider"));
+            return new OdysseusGatherSettings(lists, home, Int(root, "RepairAtPercent"));
         }
         catch (JsonException)
         {
@@ -93,7 +93,6 @@ public sealed record OdysseusGatherSettings(List<GatherList> Lists, GatherHome? 
         config.GatherLists.AddRange(from.Lists);
         if (from.Home is { } home) config.GatherHome = home;
         if (from.RepairAtPercent is { } repair and >= 0 and <= 100) config.RepairAtPercent = repair;
-        if (from.PathingProvider is { Length: > 0 } provider) config.PathingProvider = provider;
         return true;
     }
 

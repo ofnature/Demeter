@@ -17,14 +17,14 @@ public sealed class DemeterConfig : IPluginConfiguration
     /// <summary>The gather lists, in the order they are shown. Another plugin's request is a list of its own, named for it.</summary>
     public List<GatherList> GatherLists { get; set; } = [];
 
+    /// <summary>Per fishing hole (FishingSpot row): the stand points a test cast worked from, and those it did not.</summary>
+    public Dictionary<uint, Services.Fishing.HoleMemory> HoleMemory { get; set; } = new();
+
     /// <summary>Where a finished gather run takes you.</summary>
     public GatherHome GatherHome { get; set; } = GatherHome.Stay;
 
     /// <summary>Repair gear during a gather run once the worst piece is at or under this percent; 0 never repairs.</summary>
     public int RepairAtPercent { get; set; } = 30;
-
-    /// <summary>Which plugin paths and moves the character: "vnavmesh" (default) or "Ariadne".</summary>
-    public string PathingProvider { get; set; } = Services.Ipc.VnavIpc.VnavmeshProvider;
 
     /// <summary>
     /// Odysseus's saved gather lists have been looked for once. Set whether or not there were any,

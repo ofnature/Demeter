@@ -22,6 +22,28 @@ not true, and nothing here is contributed back under Apache terms.
 
 The data moved here from Odysseus (`ofnature/Odysseus`) with the gatherer, on 2026-10-22.
 
+`Assets/fish-gbr.json.gz` is GatherBuddy Reborn's fish catch data — bait and mooch chains, hooksets
+and tugs, weather and time windows, predators, lures, spearfishing and ocean details — from
+`GatherBuddy.GameData/Data/Fish/Data*.cs` at the commit recorded inside the file. **It is modified**,
+as Apache 2.0 §4(b) requires us to say: the C# data calls were read as syntax (never compiled or
+run) and written out as JSON; every id was resolved against the game's own sheets — names taken
+from the game, `Bait(id)` split into bait or mooch, a duplicate entry (44336) settled by the item's
+real name, the full bait-to-fish road computed. The values themselves are GatherBuddy's. The
+converter is `Tools/FishImport`.
+
+`Assets/fishing-holes.json.gz` is derived from GatherBuddy Reborn's community catch records
+(`GatherBuddy/CustomInfo/fish_records.json`, same commit). **Modified**: per fishing hole, the
+recorded positions are grouped into distinct stand points (within 2.5 yalms) with the facing they
+were cast at and how often each was used, and bite times are reduced to minimum/maximum per fish
+and bait, with and without Chum. Records the recorder itself marks invalid are left out of the bite
+times. No individual record is shipped.
+
+### Carbuncle Plushy fish tracker (`icykoneko/ff14-fish-tracker-app`) — MIT
+
+Used as an independent second source to **check** the fish data above, at build time only
+(`Tools/FishImport` reads its `private/fishData.yaml`). Nothing from it is shipped; where the two
+disagree the check writes a report for a person to judge, and the shipped data stays GatherBuddy's.
+
 ## Data read at runtime from the user's own installed plugins
 
 ### AutoHook (`PunishXIV/AutoHook`) — BSD-3-Clause
@@ -38,7 +60,7 @@ plugin lives at `PunishXIV/AutoHook` under BSD-3-Clause.)
 ### Odysseus (`ofnature/Odysseus`) — AGPL-3.0, the same author
 
 The gatherer (`Services/Gathering/`), the travel lessons in `Services/Travel/Traveller.cs`, the game
-layer in `Services/Game/GameBasics.cs`, the vnavmesh/Ariadne and Lifestream clients, the aetheryte
+layer in `Services/Game/GameBasics.cs`, the Lifestream client, the aetheryte
 catalogue, and the window theme came from Odysseus. AGPL-3.0 into AGPL-3.0.
 
 ### Daedalus (`ofnature/Daedalus`, the Olympus repo) — GPL-3.0, the same author
@@ -50,6 +72,6 @@ is shared with Daedalus, Charon and Odysseus on purpose, so all their tabs stack
 
 ## Handoffs, not data
 
-vnavmesh or Ariadne (pathing), Lifestream (teleports and going home) and Daedalus (fighting what
+Ariadne (pathing and movement), Lifestream (teleports and going home) and Daedalus (fighting what
 attacks on the way) are driven over their published IPC where the user has them installed. Calling a
 plugin's IPC is use, not derivation, and none of their code is included here.
