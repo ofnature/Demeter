@@ -22,6 +22,9 @@ public sealed class FishWindow : DemeterWindow
     private readonly HoleApproach _approach;
     private readonly Action<FishingHole, IReadOnlyList<StandPoint>> _goThere;
     private readonly Func<bool> _otherBusy;
+    private readonly Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> _fishHere;
+    private readonly FishingRun _run;
+    private int _count = 1;
     private readonly List<(uint Id, string Name)> _names;
     private string _filter = string.Empty;
     private uint _selected;
@@ -30,8 +33,11 @@ public sealed class FishWindow : DemeterWindow
     private readonly Dictionary<uint, IReadOnlyList<CatchWindow>> _windows = new();
 
     public FishWindow(FishCatalog catalog, FishSpots spots, FishingHoles holes, HoleApproach approach,
-        Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Func<bool> otherBusy) : base("Demeter Fish###DemeterFish")
+        Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> fishHere,
+        FishingRun run, Func<bool> otherBusy) : base("Demeter Fish###DemeterFish")
     {
+        _fishHere = fishHere;
+        _run = run;
         _catalog = catalog;
         _spots = spots;
         _holes = holes;
@@ -131,11 +137,25 @@ public sealed class FishWindow : DemeterWindow
         }
 
         DemeterTheme.SectionHeader("WHEN");
+        ImGui.SetNextItemWidth(90f);
+        if (ImGui.InputInt("How many##fishcount", ref _count))
+            _count = Math.Clamp(_count, 1, 999);
+        var busy = _approach.Busy || _run.Busy || _otherBusy();
         foreach (var hole in holes)
         {
             using var id = Dalamud.Interface.Utility.Raii.ImRaii.PushId((int)hole.Id);
             var stands = _holes.StandsAt(hole.Id);
-            using (ImRaii.Disabled(stands.Count == 0 || _approach.Busy || _otherBusy()))
+            using (ImRaii.Disabled(stands.Count == 0 || busy || fish.IsSpearfish))
+            {
+                if (ImGui.SmallButton("Fish"))
+                    _fishHere(fish, _count, hole, stands);
+            }
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(fish.IsSpearfish
+                    ? "Spearfishing is not done yet."
+                    : $"Go there and catch {_count}: the bait and mooch road from the data, each bite judged by its timing and tug, unwanted fish let go. Stops at the count, or when the window closes.");
+            ImGui.SameLine();
+            using (ImRaii.Disabled(stands.Count == 0 || busy))
             {
                 if (ImGui.SmallButton("Go there"))
                     _goThere(hole, stands);
@@ -162,9 +182,24 @@ public sealed class FishWindow : DemeterWindow
         }
     }
 
-    /// <summary>What "Go there" is doing, with a Stop.</summary>
+    /// <summary>What "Fish" or "Go there" is doing, with a Stop.</summary>
     private void DrawApproach()
     {
+        if (_run.Busy)
+        {
+            if (DemeterTheme.IconTextButton(Dalamud.Interface.FontAwesomeIcon.Stop, "Stop", DemeterTheme.RedDark, "Stop fishing; the line is reeled in."))
+                _run.Cancel();
+            ImGui.SameLine();
+            ImGui.TextColored(DemeterTheme.WakeFoam, _run.Status);
+            if (_run.Caught.Count > 0)
+                ImGui.TextColored(DemeterTheme.TextSecondary, "Landed: " + string.Join(", ", _run.Caught.Select(kv => $"{_spots.ItemName(kv.Key)} ×{kv.Value}")));
+            return;
+        }
+        if (_run.State is FishingRunState.Done or FishingRunState.Faulted && _run.Status.Length > 0)
+        {
+            ImGui.TextColored(_run.State == FishingRunState.Faulted ? DemeterTheme.StatusRed : DemeterTheme.StatusGreen, _run.Status);
+            return;
+        }
         if (_approach.Busy)
         {
             if (DemeterTheme.IconTextButton(Dalamud.Interface.FontAwesomeIcon.Stop, "Stop", DemeterTheme.RedDark, "Stop going to the hole."))

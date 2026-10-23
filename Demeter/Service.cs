@@ -30,4 +30,5 @@ internal sealed class Service
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInterop { get; private set; } = null!;
+    [PluginService] internal static ISigScanner SigScanner { get; private set; } = null!;
 }

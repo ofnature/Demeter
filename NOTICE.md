@@ -57,6 +57,16 @@ plugin lives at `PunishXIV/AutoHook` under BSD-3-Clause.)
 
 ## Code ported
 
+### GatherBuddy Reborn (`FFXIV-CombatReborn/GatherBuddyReborn`) — Apache-2.0
+
+`Services/Game/GameFisherWorld.cs` follows GatherBuddy Reborn's fishing parser and recorder
+(`GatherBuddy/FishTimer/Parser/FishingParser.cs`, `SeFunctions/EventFramework.cs`,
+`SeFunctions/SeTugType.cs`, `SeFunctions/CurrentBait.cs`): the hook on `AgentCatch.UpdateCatch`
+through ClientStructs' own function pointer (collectables reported 500,000 above the item id), the
+fishing state off ClientStructs' `FishingEventHandler`, the bait switch as game command 701/4, and
+the tug read from the static address its `SeTugType` signature finds (36/37/38 = light/medium/heavy).
+Rewritten for Demeter, not copied; Apache-2.0 permits it with this notice.
+
 ### Odysseus (`ofnature/Odysseus`) — AGPL-3.0, the same author
 
 The gatherer (`Services/Gathering/`), the travel lessons in `Services/Travel/Traveller.cs`, the game

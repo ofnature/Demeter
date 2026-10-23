@@ -51,6 +51,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly DebugWindow? _debugWindow;
     private readonly FishWindow _fishWindow = null!;
     private readonly HoleApproach _approach = null!;
+    private readonly FishingRun _fishing = null!;
+    private readonly GameFisherWorld _fisherWorld = null!;
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
@@ -106,7 +108,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             // on the answer.
             GatheringTarget? PlanFor(uint itemId) => _config.Enabled ? GatheringPlan.For(itemId, source, atlas) : null;
             _items = new ItemGateway(_gatherer, () => _config.Enabled,
-                () => _lists.State == GatherListRunState.Running, message => Say(message));
+                () => _lists.State == GatherListRunState.Running || FishingBusy, message => Say(message));
             _gateway = new GatherGateway(
                 _lists,
                 _config.GatherLists,
@@ -116,7 +118,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
                     ? "Demeter is switched off"
                     : GatherReadiness.WhyNot(PlanFor(itemId), _game.LevelOfJob, $"item {itemId}") ?? "nothing is in the way",
                 _game.ItemCount,
-                () => _lists.State == GatherListRunState.Running || _items.IsRunning,
+                () => _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy,
                 message => Say(message));
 
             // Fishing, phase 1: what is known about every fish, and when each can next be caught.
@@ -126,11 +128,15 @@ public sealed class DemeterPlugin : IDalamudPlugin
             var holes = FishingHoles.Load(FishingHoles.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
             _approach = new HoleApproach(new GameFishingWorld(_game, gatherWorld, ObjectTable, Condition, message => Say(message)),
                 new Traveller(_game), SaveConfig);
-            _fishWindow = new FishWindow(fish, new FishSpots(DataManager, message => Warn(message)), holes, _approach,
-                GoToHole, () => _lists.State == GatherListRunState.Running || _items.IsRunning);
+            // Phase 3: the fisher — cast, judge each bite, hook or let go, mooch, Intuition, stop at the count.
+            var spots = new FishSpots(DataManager, message => Warn(message));
+            _fisherWorld = new GameFisherWorld(_game, ObjectTable, SigScanner, GameInterop, message => Say(message));
+            _fishing = new FishingRun(_fisherWorld, _approach, fish, holes, abilities.Knows, spots.RatesFor, spots.ItemName);
+            _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
+                () => _lists.State == GatherListRunState.Running || _items.IsRunning);
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
-                () => _items.IsRunning);
+                () => _items.IsRunning || FishingBusy);
 #if DEBUG
             _debugWindow = new DebugWindow(_gatherer, gatherWorld);
 #endif
@@ -246,17 +252,33 @@ public sealed class DemeterPlugin : IDalamudPlugin
         try { StopAll(); } catch { }
         _windowSystem.RemoveAllWindows();
         _ipc?.Dispose();
+        _fisherWorld?.Dispose();
         try { _dockLayout?.Dispose(); } catch { }
         _ownLog?.Dispose();
     }
 
     /// <summary>Anything Demeter is driving — what <c>Demeter.IsBusy</c> answers, and what Daedalus fights for.</summary>
-    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy);
+    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy);
+
+    /// <summary>Going to a hole, or fishing at one.</summary>
+    private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true;
+
+    /// <summary>The Fish window's "Fish": go to the hole and catch this many of the fish.</summary>
+    private void FishHere(FishInfo fish, int count, FishingHole hole, IReadOnlyList<StandPoint> recorded)
+    {
+        if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
+            return;
+        if (!_config.HoleMemory.TryGetValue(hole.Id, out var memory))
+            _config.HoleMemory[hole.Id] = memory = new HoleMemory();
+        _fisherWorld.Listening = true;
+        _fishing.Begin(fish, count, hole, recorded, memory);
+        Say($"Fishing {fish.Name} ×{count} at {hole.Name} ({hole.ZoneName}).");
+    }
 
     /// <summary>The Fish window's "Go there": Fisher on, to the hole, a test cast, reeled in.</summary>
     private void GoToHole(FishingHole hole, IReadOnlyList<StandPoint> recorded)
     {
-        if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy)
+        if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
             return;
         if (!_config.HoleMemory.TryGetValue(hole.Id, out var memory))
             _config.HoleMemory[hole.Id] = memory = new HoleMemory();
@@ -271,11 +293,18 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
         if (!_config.Enabled)
         {
-            if (_lists.State == GatherListRunState.Running || _items.IsRunning)
+            if (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
                 StopAll();
         }
 
         // A single item for a caller that drives its own flow (Odysseus).
+        if (_fishing.Busy)
+        {
+            _fishing.Tick();
+            return;
+        }
+        _fisherWorld.Listening = false;
+
         if (_approach.Busy)
         {
             _approach.Tick();
@@ -328,6 +357,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
     private void StopAll()
     {
+        if (_fishing.Busy)
+            _fishing.Cancel();
         if (_approach.Busy)
             _approach.Cancel();
         _gateway.Stop();
