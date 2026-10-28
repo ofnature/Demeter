@@ -20,6 +20,14 @@ Odysseus's quest gathers and custom deliveries, and your own gather lists.
   Collectable fish are kept only at the collectability asked for. `/demeter fish` looks any fish up.
 - **For other plugins.** Every gate is listed in [For other plugins](#for-other-plugins) below.
 
+- **Materia (in progress).** `Services/Melding/` works out the best gatherer gear, melds and food:
+  which piece to wear in each slot, what goes in every socket (overmelds included, with their odds
+  and the materia they use on average), which food to eat, so Gathering, Perception and GP reach the
+  game's highest thresholds — read from the sheets, never typed in — as cheaply as the bags allow,
+  and why. Not wired to the game yet: reading the gear and driving the meld window come next. Its
+  search follows Daedalus's meld optimizer; some numbers follow Teamcraft (MIT); the tests run on
+  xivapi/ffxiv-datamining sheet rows. Details in `NOTICE.md`.
+
 Companion to Daedalus and Odysseus. AGPL-3.0; see `NOTICE.md` for third-party data.
 
 ## Needs

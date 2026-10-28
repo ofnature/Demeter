@@ -80,6 +80,43 @@ Odysseus) — `DockHover`, `DockMath`, `DockLayout`/`DockLayoutShare` unchanged,
 Demeter's colours. GPL-3.0 code combines with AGPL-3.0. The layout share tag (`EdgeDock.Layout.v2`)
 is shared with Daedalus, Charon and Odysseus on purpose, so all their tabs stack on one edge.
 
+### Daedalus (`ofnature/Daedalus`) — LGPL-3.0, the same author: the materia optimizer
+
+`Services/Melding/` (the gatherer materia optimizer) is ported from Daedalus's combat meld optimizer
+in `Daedalus/Services/Gear/` at commit `44bd566`: `StatCapMath.cs` (per-piece caps, ItemLevel × BaseParam
+slot ‰, rounded half up) nearly as is, and the shape of `MeldSweepOptimizer.cs` (cap headroom above
+base and kept melds, materia clipped at the cap, whole sets scored against one model) rewritten
+around a threshold ranking and an exact search instead of `MeldDpsModel`'s DPS multiplier. Each file
+names its Daedalus source in its header. Daedalus's repository carries `COPYING` and
+`COPYING.LESSER`: LGPL-3.0, which may be conveyed under the GPL-3.0 and so combined into this
+AGPL-3.0 project. (The edge dock above came from the same repository.)
+
+### Teamcraft (`ffxiv-teamcraft/ffxiv-teamcraft`) — MIT
+
+Ported with attribution, at commit `c022ca5`, from `apps/client/src/app/modules/gearsets/materia.service.ts`
+and `apps/client/src/app/lazy-data/static-data.ts`: the cap divisor `BaseParam.MeldParam[Item.BaseParamModifier]`
+(`StatCapMath`), the reading of MateriaJoinRateGatherCraft for grades XI and XII by parity (XI as
+IX, XII as X; `OvermeldRates`), and the formula for how many materia to bring to land an overmeld
+with a given confidence (`MateriaOptimizer.AttemptsAtConfidence`). Rewritten in C#, not copied. The
+MIT notice is in `licenses/MIT-Teamcraft.txt`.
+
+## Test data, not shipped
+
+### xivapi/ffxiv-datamining — game data
+
+`Demeter.Tests/Fixtures/Melding/*.csv` are rows of the game's own sheets (GatheringPoint,
+GatheringPointBonus, Item, ItemFood, Materia, MateriaJoinRateGatherCraft, BaseParam, ItemLevel and a
+few more) from `xivapi/ffxiv-datamining` at commit `44948e4` (2026-10-20), trimmed by the
+`trim.py` beside them; `SOURCE.txt` there says exactly what was kept. The values are Square Enix's
+game data — the same Demeter reads from the client at runtime — and the repository has no licence
+file of its own. They are test inputs only and never ship with the plugin.
+
+### Facts from the community
+
+The community stat tiers in `GatheringTargets.CommunityTiers` (990 GP, 4570 Gathering for big fish,
+5090 Perception) were supplied by Demeter's author as facts and are user-editable. Nothing was copied
+from guides, calculator spreadsheets or their images.
+
 ## Handoffs, not data
 
 Ariadne (pathing and movement), Lifestream (teleports and going home) and Daedalus (fighting what
