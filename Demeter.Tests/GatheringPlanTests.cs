@@ -1,6 +1,5 @@
 using System.Numerics;
 using Demeter.Services.Gathering;
-using Demeter.Services.Gathering;
 
 namespace Demeter.Tests;
 
