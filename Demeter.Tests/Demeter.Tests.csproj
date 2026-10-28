@@ -43,4 +43,9 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <!-- Trimmed game sheets for the melding tests (see Fixtures/Melding/SOURCE.txt). -->
+  <ItemGroup>
+    <None Include="Fixtures\**\*.csv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

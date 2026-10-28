@@ -1,0 +1,30 @@
+Melding test fixtures — where they come from
+============================================
+
+Source:   https://github.com/xivapi/ffxiv-datamining  (csv/en/)
+Commit:   44948e4cda5846eab0baa9872122a888fcc4f1b1  (2026-10-20)
+Extractor named by that repository: XIVData Oxidizer.
+Licence:  the repository carries no licence file; the values are Square Enix's game data, the
+          same data Demeter reads from the live client at runtime. Used here as test inputs
+          only; nothing in this folder ships with the plugin.
+
+Trimmed by trim.py (this folder), run as:
+    python3 -I trim.py <ffxiv-datamining>/csv/en Demeter.Tests/Fixtures/Melding
+Header names and row ids are the source's own, so any value can be checked against the commit.
+
+  GatheringPointBonus, GatheringCondition, GatheringPointBonusType,
+  MateriaJoinRateGatherCraft ........ whole sheets
+  GatheringPoint .................... rows with a bonus; columns #, GatheringPointBase,
+                                      GatheringPointBonus[0..1], TerritoryType, Type
+  Materia ........................... rows 18, 19, 20 (BaseParam 72 Gathering, 73 Perception, 10 GP)
+  BaseParam ......................... rows 10, 72, 73; slot percentages and MeldParam[0..12]
+  Item .............................. gear whose ClassJobCategory includes MIN/BTN/FSH at item
+                                      level 690 or more, the gatherer materia, nine gatherer foods;
+                                      the columns gear selection needs
+  ClassJobCategory .................. the categories those items use; MIN/BTN/FSH columns
+  ItemLevel ......................... the item levels those items use; GP, Gathering, Perception
+  ItemAction, ItemFood .............. the nine foods' rows (ItemAction Data[1] = ItemFood row)
+
+Note: in GatheringPointBonus the two unnamed columns after BonusValue (Unknown1, Unknown2) read as
+the top of a ranged bonus ("～" bonus types): the stat at which the bonus stops growing, and the
+bonus there. That reading is ours, not the game's; GatheringPointBonusRow documents it.

@@ -1,0 +1,4 @@
+#,Name,OneHandWeaponPercent,OffHandPercent,HeadPercent,ChestPercent,HandsPercent,WaistPercent,LegsPercent,FeetPercent,EarringPercent,NecklacePercent,BraceletPercent,RingPercent,TwoHandWeaponPercent,MeldParam[0],MeldParam[1],MeldParam[2],MeldParam[3],MeldParam[4],MeldParam[5],MeldParam[6],MeldParam[7],MeldParam[8],MeldParam[9],MeldParam[10],MeldParam[11],MeldParam[12]
+10,GP,20,20,20,20,20,0,20,40,250,250,250,130,20,100,100,100,100,100,100,100,100,100,100,100,100,100
+72,Gathering,350,200,20,200,150,0,100,10,10,10,10,10,350,100,100,100,100,100,100,100,100,100,100,100,100,100
+73,Perception,200,350,200,100,10,0,50,110,10,10,10,10,200,100,100,100,100,100,100,100,100,100,100,100,100,100
