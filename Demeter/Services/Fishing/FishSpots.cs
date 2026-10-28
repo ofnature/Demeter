@@ -9,12 +9,20 @@ namespace Demeter.Services.Fishing;
 /// <param name="X">Map position, sheet units (the sheet carries no height).</param>
 public sealed record FishingHole(uint Id, string Name, uint TerritoryId, string ZoneName, int X, int Z, int Radius, int Level);
 
+/// <summary>Where a fish is caught and what the weather does there — <see cref="FishSpots"/> in the game, a fake in tests.</summary>
+public interface IFishPlaces
+{
+    IReadOnlyList<FishingHole> HolesFor(uint fishItemId);
+    IReadOnlyList<(uint Weather, int Cumulative)> RatesFor(uint territoryId);
+    string ItemName(uint id);
+}
+
 /// <summary>
 /// The game's side of fishing data: which holes hold a fish (<c>FishingSpot.Item</c>), and each
 /// zone's weather chances (<c>TerritoryType.WeatherRate</c> → <c>WeatherRate</c>, made cumulative).
 /// Read once; ocean voyages and spearfishing have sheets of their own and are not here.
 /// </summary>
-public sealed class FishSpots
+public sealed class FishSpots : IFishPlaces
 {
     private readonly Dictionary<uint, List<FishingHole>> _holesByFish = new();
     private readonly Dictionary<uint, IReadOnlyList<(uint Weather, int Cumulative)>> _ratesByTerritory = new();

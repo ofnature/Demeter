@@ -39,7 +39,7 @@ public static class GatherReadiness
             return $"nothing in the sheets gathers {name} anywhere Demeter can reach";
 
         if (target.ClassJobId == Fisher)
-            return $"{name} is fished, and Demeter does not fish";
+            return $"{name} is fished — the fisher answers for it, not the node gatherer";
 
         if (target.ClassJobId is not (Miner or Botanist))
             return $"{name} comes from a node Demeter does not know how to work";

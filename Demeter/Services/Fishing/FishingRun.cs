@@ -35,6 +35,15 @@ public interface IFisherWorld
 
     /// <summary>Catches reported since the last call, oldest first.</summary>
     IReadOnlyList<Catch> TakeCatches();
+
+    /// <summary>How many of the item are held at or above a collectability (0 counts every one).</summary>
+    int CollectableCount(uint itemId, int minimumCollectability);
+
+    /// <summary>The "keep it as a collectable?" prompt on screen: the fish and its collectability. Null otherwise.</summary>
+    (uint ItemId, int Collectability)? CollectablePrompt { get; }
+
+    /// <summary>Yes keeps the fish as a collectable; no lets it go.</summary>
+    void AnswerCollectable(bool keep);
     void Log(string message);
 }
 
@@ -62,6 +71,9 @@ public sealed class FishingRun
 {
     public const uint Cast = 289, Hook = 296, Mooch = 297, Mooch2 = 268, Quit = 299;
     public const uint IntuitionStatus = 568, ChumStatus = 763;
+
+    /// <summary>Fisher's Collect (a toggle, Lv 50, quest "Inscrutable Tastes") and the status it shows while on.</summary>
+    public const uint Collect = 4101, CollectStatus = 805;
 
     private static readonly TimeSpan ActionGap = TimeSpan.FromSeconds(1.5);
     private static readonly TimeSpan BaitWait = TimeSpan.FromSeconds(5);
@@ -96,6 +108,8 @@ public sealed class FishingRun
     private DateTime _phaseStart;
     private uint _baitAsked;
     private DateTime _baitAskedAt;
+    private int _collectability;
+    private bool _promptAnswered;
 
     public FishingRun(IFisherWorld world, HoleApproach approach, FishCatalog fish, FishingHoles holes,
         Func<uint, bool> knows, Func<uint, IReadOnlyList<(uint Weather, int Cumulative)>> ratesFor, Func<uint, string> nameOf)
@@ -114,18 +128,25 @@ public sealed class FishingRun
     public string FailReason { get; private set; } = string.Empty;
     public bool Busy => State is FishingRunState.Approaching or FishingRunState.Fishing or FishingRunState.Finishing;
 
-    /// <summary>How many more of the target the bag holds than when the run began.</summary>
-    public int Gathered => _target is null ? 0 : _world.ItemCount(_target.Id) - _baseline;
+    /// <summary>How many more of the target the bag holds than when the run began — at the collectability asked for.</summary>
+    public int Gathered => _target is null ? 0 : _world.CollectableCount(_target.Id, _collectability) - _baseline;
 
     /// <summary>Everything landed this run, by item.</summary>
     public IReadOnlyDictionary<uint, int> Caught => _caught;
 
-    public void Begin(FishInfo target, int count, FishingHole hole, IReadOnlyList<StandPoint> recorded, HoleMemory memory)
+    /// <param name="collectability">
+    /// Above zero, the fish is wanted as a collectable at least this good (a custom delivery): Collect
+    /// goes on, and each catch's prompt keeps the target only when it clears the bar. Zero fishes plainly,
+    /// with Collect off so no prompt interrupts.
+    /// </param>
+    public void Begin(FishInfo target, int count, FishingHole hole, IReadOnlyList<StandPoint> recorded, HoleMemory memory,
+        int collectability = 0)
     {
         _target = target;
         _hole = hole;
         _wanted = count;
-        _baseline = _world.ItemCount(target.Id);
+        _collectability = Math.Max(0, collectability);
+        _baseline = _world.CollectableCount(target.Id, _collectability);
         _caught.Clear();
         _lastCatch = 0;
         _mooching = 0;
@@ -139,6 +160,11 @@ public sealed class FishingRun
         if (target.Path is not { Count: > 0 })
         {
             Fault($"the fish data names no bait for {Name(target.Id)}");
+            return;
+        }
+        if (_collectability > 0 && !_knows(Collect))
+        {
+            Fault($"{Name(target.Id)} is wanted as a collectable, and Collect is not learned (Fisher Lv 50, quest \"Inscrutable Tastes\")");
             return;
         }
         // A road through other fish is mooched; without Mooch learned the target can never come.
@@ -278,9 +304,21 @@ public sealed class FishingRun
                 }
                 break;
 
+            case FishState.ConfirmingCollectable:
+                if (_promptAnswered || _world.CollectablePrompt is not { } prompt)
+                    break;
+                _promptAnswered = true;
+                // The target only at the collectability asked for; anything else (a fish on the road,
+                // a stray) is kept — it costs nothing and may be wanted.
+                var keep = prompt.ItemId != target.Id || prompt.Collectability >= _collectability;
+                _world.Log($"Collectable {Name(prompt.ItemId)} at {prompt.Collectability}: {(keep ? "kept" : $"let go (below {_collectability})")}.");
+                _world.AnswerCollectable(keep);
+                break;
+
             case FishState.None:
             case FishState.PoleReady:
                 _lineInSeen = false;
+                _promptAnswered = false;
                 if (_world.IsOccupied || now - _lastAction < ActionGap)
                     break;
                 NextCast(now, immediate, path, why);
@@ -302,6 +340,17 @@ public sealed class FishingRun
         }
 
         _mooching = 0;
+
+        // Collect on for a collectable target, off otherwise — so a plain run never meets the prompt.
+        var wantCollect = _collectability > 0;
+        if (_world.HasStatus(CollectStatus) != wantCollect && (wantCollect ? _knows(Collect) : true))
+        {
+            _lastAction = now;
+            Status = $"{why}: Collect {(wantCollect ? "on" : "off")}.";
+            _world.UseAction(Collect);
+            return;
+        }
+
         var start = path[0];
         if (_world.CurrentBait != start)
         {

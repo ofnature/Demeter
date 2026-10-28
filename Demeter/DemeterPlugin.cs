@@ -41,7 +41,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly WindowSystem _windowSystem = new("Demeter");
     private readonly DemeterConfig _config = null!;
     private readonly GameBasics _game = null!;
-    private readonly OwnGatherer _gatherer = null!;
+    private readonly CompositeGatherer _gatherer = null!;
     private readonly GatherListRunner _lists = null!;
     private readonly GatherGateway _gateway = null!;
     private readonly ItemGateway _items = null!;
@@ -95,31 +95,10 @@ public sealed class DemeterPlugin : IDalamudPlugin
             };
             var source = new GatheringSource(DataManager, message => Warn(message));
             var atlas = new NodeAtlas(NodeAtlas.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
-            _gatherer = new OwnGatherer(new GatherRunner(gatherWorld, new Traveller(_game)), source, atlas, message => Say(message))
+            var nodes = new OwnGatherer(new GatherRunner(gatherWorld, new Traveller(_game)), source, atlas, message => Say(message))
             {
                 Enabled = _config.Enabled,
             };
-            var gatherables = new GatherableIndex(DataManager, message => Warn(message));
-            _lists = new GatherListRunner(_gatherer, _game.ItemCount, gatherables.NameOf, message => Say(message),
-                new GearRepair(_game, message => Say(message)), () => _config.RepairAtPercent, () => _game.FreeBagSlots);
-
-            // The list gate's promise is stricter than the gatherer's own CanGather: a node has to
-            // exist AND this character has to be able to work it, because a crafting queue plans
-            // on the answer.
-            GatheringTarget? PlanFor(uint itemId) => _config.Enabled ? GatheringPlan.For(itemId, source, atlas) : null;
-            _items = new ItemGateway(_gatherer, () => _config.Enabled,
-                () => _lists.State == GatherListRunState.Running || FishingBusy, message => Say(message));
-            _gateway = new GatherGateway(
-                _lists,
-                _config.GatherLists,
-                SaveConfig,
-                itemId => GatherReadiness.CanGather(PlanFor(itemId), _game.LevelOfJob),
-                itemId => !_config.Enabled
-                    ? "Demeter is switched off"
-                    : GatherReadiness.WhyNot(PlanFor(itemId), _game.LevelOfJob, $"item {itemId}") ?? "nothing is in the way",
-                _game.ItemCount,
-                () => _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy,
-                message => Say(message));
 
             // Fishing, phase 1: what is known about every fish, and when each can next be caught.
             var fish = FishCatalog.Load(FishCatalog.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
@@ -130,15 +109,49 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 new Traveller(_game), SaveConfig);
             // Phase 3: the fisher — cast, judge each bite, hook or let go, mooch, Intuition, stop at the count.
             var spots = new FishSpots(DataManager, message => Warn(message));
-            _fisherWorld = new GameFisherWorld(_game, ObjectTable, SigScanner, GameInterop, message => Say(message));
+            _fisherWorld = new GameFisherWorld(_game, gatherWorld, GameGui, ObjectTable, SigScanner, GameInterop, message => Say(message));
             _fishing = new FishingRun(_fisherWorld, _approach, fish, holes, abilities.Knows, spots.RatesFor, spots.ItemName);
+            // Phase 4: fish go wherever gathered items go — the lists, Hephaestus's and Odysseus's gates.
+            var fisher = new FishGatherer(fish, spots, holes, _fishing, MemoryFor, _game.LevelOfJob, abilities.Knows)
+            {
+                Enabled = _config.Enabled,
+            };
+            _gatherer = new CompositeGatherer(nodes, fisher);
+
+            var gatherables = new GatherableIndex(DataManager, message => Warn(message));
+            gatherables.Include(fish.All.Where(f => !f.IsSpearfish && !f.IsOcean).Select(f => (f.Id, f.Name ?? spots.ItemName(f.Id))));
+            _lists = new GatherListRunner(_gatherer, _game.ItemCount, gatherables.NameOf, message => Say(message),
+                new GearRepair(_game, message => Say(message)), () => _config.RepairAtPercent, () => _game.FreeBagSlots);
+
+            // The list gate's promise is stricter than the gatherer's own CanGather: a node has to
+            // exist AND this character has to be able to work it, because a crafting queue plans
+            // on the answer. A fish is the fisher's to answer for.
+            GatheringTarget? PlanFor(uint itemId) => _config.Enabled ? GatheringPlan.For(itemId, source, atlas) : null;
+            _items = new ItemGateway(_gatherer, () => _config.Enabled,
+                () => _lists.State == GatherListRunState.Running || FishingBusy, message => Say(message));
+            _gateway = new GatherGateway(
+                _lists,
+                _config.GatherLists,
+                SaveConfig,
+                itemId => fisher.Handles(itemId)
+                    ? fisher.CanGather(itemId)
+                    : GatherReadiness.CanGather(PlanFor(itemId), _game.LevelOfJob),
+                itemId => !_config.Enabled
+                    ? "Demeter is switched off"
+                    : fisher.Handles(itemId)
+                        ? fisher.WhyNot(itemId)
+                        : GatherReadiness.WhyNot(PlanFor(itemId), _game.LevelOfJob, $"item {itemId}") ?? "nothing is in the way",
+                _game.ItemCount,
+                () => _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy,
+                message => Say(message));
+
             _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning);
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);
 #if DEBUG
-            _debugWindow = new DebugWindow(_gatherer, gatherWorld);
+            _debugWindow = new DebugWindow(nodes, gatherWorld);
 #endif
             _mainWindow = new MainWindow(new MainWindowDeps(
                 _config, SaveConfig, _lists, _gateway, _items, _gatherer, gatherables.NameOf, abilities, _game.LevelOfJob,
@@ -260,18 +273,28 @@ public sealed class DemeterPlugin : IDalamudPlugin
     /// <summary>Anything Demeter is driving — what <c>Demeter.IsBusy</c> answers, and what Daedalus fights for.</summary>
     private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy);
 
-    /// <summary>Going to a hole, or fishing at one.</summary>
+    /// <summary>Going to a hole, or fishing at one — whoever started it.</summary>
     private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true;
+
+    /// <summary>The fishing run (or the bare approach) was started from the Fish window, so the frame ticks it.
+    /// One started by the lists or a gate is ticked by them, through the gatherer.</summary>
+    private bool _fishingDirect;
+
+    /// <summary>What Demeter has learned about a hole's stand points, made on first use.</summary>
+    private HoleMemory MemoryFor(uint holeId)
+    {
+        if (!_config.HoleMemory.TryGetValue(holeId, out var memory))
+            _config.HoleMemory[holeId] = memory = new HoleMemory();
+        return memory;
+    }
 
     /// <summary>The Fish window's "Fish": go to the hole and catch this many of the fish.</summary>
     private void FishHere(FishInfo fish, int count, FishingHole hole, IReadOnlyList<StandPoint> recorded)
     {
         if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
             return;
-        if (!_config.HoleMemory.TryGetValue(hole.Id, out var memory))
-            _config.HoleMemory[hole.Id] = memory = new HoleMemory();
-        _fisherWorld.Listening = true;
-        _fishing.Begin(fish, count, hole, recorded, memory);
+        _fishingDirect = true;
+        _fishing.Begin(fish, count, hole, recorded, MemoryFor(hole.Id));
         Say($"Fishing {fish.Name} ×{count} at {hole.Name} ({hole.ZoneName}).");
     }
 
@@ -280,10 +303,9 @@ public sealed class DemeterPlugin : IDalamudPlugin
     {
         if (!_config.Enabled || _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
             return;
-        if (!_config.HoleMemory.TryGetValue(hole.Id, out var memory))
-            _config.HoleMemory[hole.Id] = memory = new HoleMemory();
+        _fishingDirect = true;
         _approach.KeepFishing = false;
-        _approach.Begin(hole, recorded, memory);
+        _approach.Begin(hole, recorded, MemoryFor(hole.Id));
         Say($"Going to {hole.Name} ({hole.ZoneName}) to prove a stand point.");
     }
 
@@ -297,20 +319,26 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 StopAll();
         }
 
+        // The catch report is heard only while a fishing run is going, whoever runs it.
+        _fisherWorld.Listening = _fishing.Busy;
+
+        // Started from the Fish window: "Fish" (the run ticks its own approach) or "Go there".
+        if (_fishingDirect)
+        {
+            if (_fishing.Busy)
+            {
+                _fishing.Tick();
+                return;
+            }
+            if (_approach.Busy)
+            {
+                _approach.Tick();
+                return;
+            }
+            _fishingDirect = false;
+        }
+
         // A single item for a caller that drives its own flow (Odysseus).
-        if (_fishing.Busy)
-        {
-            _fishing.Tick();
-            return;
-        }
-        _fisherWorld.Listening = false;
-
-        if (_approach.Busy)
-        {
-            _approach.Tick();
-            return;
-        }
-
         if (_items.IsRunning)
         {
             _items.Tick();

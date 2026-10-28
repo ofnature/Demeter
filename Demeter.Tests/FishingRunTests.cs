@@ -81,6 +81,12 @@ public class FishingRunTests
         public List<uint> Actions { get; } = [];
         public List<string> Logged { get; } = [];
         public Action<uint>? OnLanded { get; set; }
+
+        /// <summary>Collectability per landed fish, in order; a collectable catch asks before it is kept.</summary>
+        public Queue<int> Values { get; } = new();
+        public List<(uint Fish, int Value)> Collectables { get; } = [];
+        public List<(uint Fish, int Value, bool Kept)> Answers { get; } = [];
+        private (uint ItemId, int Collectability)? _prompt;
         private readonly List<Catch> _catches = [];
         private (uint Fish, DateTime At)? _bite;
         private DateTime _biteStarted;
@@ -113,12 +119,22 @@ public class FishingRunTests
                     break;
                 case FishingRun.Hook when State == FishState.Bite && _bite is { } b:
                     Hooked.Add(b.Fish);
-                    Bag[b.Fish] = Bag.GetValueOrDefault(b.Fish) + 1;
-                    _catches.Add(new Catch(b.Fish, 1, false, false));
                     _last = b.Fish;
                     _bite = null;
+                    if (Statuses.Contains(FishingRun.CollectStatus))
+                    {
+                        _prompt = (b.Fish, Values.Count > 0 ? Values.Dequeue() : 0);
+                        State = FishState.ConfirmingCollectable;
+                        break;
+                    }
+                    Bag[b.Fish] = Bag.GetValueOrDefault(b.Fish) + 1;
+                    _catches.Add(new Catch(b.Fish, 1, false, false));
                     State = FishState.PoleReady;
                     OnLanded?.Invoke(b.Fish);
+                    break;
+                case FishingRun.Collect:
+                    if (!Statuses.Remove(FishingRun.CollectStatus))
+                        Statuses.Add(FishingRun.CollectStatus);
                     break;
                 case FishingRun.Quit:
                     State = FishState.None;
@@ -161,6 +177,26 @@ public class FishingRunTests
         }
 
         public void Log(string message) => Logged.Add(message);
+
+        public int CollectableCount(uint itemId, int minimumCollectability)
+            => minimumCollectability <= 0
+                ? Bag.GetValueOrDefault(itemId) + Collectables.Count(c => c.Fish == itemId)
+                : Collectables.Count(c => c.Fish == itemId && c.Value >= minimumCollectability);
+
+        public (uint ItemId, int Collectability)? CollectablePrompt => State == FishState.ConfirmingCollectable ? _prompt : null;
+
+        public void AnswerCollectable(bool keep)
+        {
+            var (fish, value) = _prompt!.Value;
+            Answers.Add((fish, value, keep));
+            if (keep)
+            {
+                Collectables.Add((fish, value));
+                _catches.Add(new Catch(fish, 1, true, false));
+            }
+            _prompt = null;
+            State = FishState.PoleReady;
+        }
 
         // ── the approach's view: already at the hole, Fisher on; the test cast proves it ──
         public bool IsMounted => false;
@@ -338,5 +374,47 @@ public class FishingRunTests
         run.Begin(target, 1, Hole, [new StandPoint { X = 1 }], new HoleMemory());
         Assert.Equal(FishingRunState.Faulted, run.State);
         Assert.Contains("Mooch is not learned", run.FailReason);
+    }
+
+    [Fact]
+    public void A_collectable_target_puts_Collect_on_and_keeps_only_what_clears_the_bar()
+    {
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, pond) = Make([target]);
+        pond.Script[Bait] = new([(Target, 17), (Target, 16), (Target, 18)]);
+        pond.Values.Enqueue(310);   // below 400: let go
+        pond.Values.Enqueue(452);
+        pond.Values.Enqueue(400);
+
+        run.Begin(target, 2, Hole, [new StandPoint { X = 1 }], new HoleMemory(), collectability: 400);
+        Assert.Equal(FishingRunState.Done, Run(run, pond));
+
+        Assert.Contains(FishingRun.Collect, pond.Actions);
+        Assert.Equal([(Target, 310, false), (Target, 452, true), (Target, 400, true)], pond.Answers);
+        Assert.Equal(2, pond.CollectableCount(Target, 400));
+    }
+
+    [Fact]
+    public void A_plain_run_switches_Collect_off_so_no_prompt_comes()
+    {
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, pond) = Make([target]);
+        pond.Statuses.Add(FishingRun.CollectStatus);   // left on from a delivery
+        pond.Script[Bait] = new([(Target, 17)]);
+
+        run.Begin(target, 1, Hole, [new StandPoint { X = 1 }], new HoleMemory());
+        Assert.Equal(FishingRunState.Done, Run(run, pond));
+        Assert.DoesNotContain(FishingRun.CollectStatus, pond.Statuses);
+        Assert.Empty(pond.Answers);
+    }
+
+    [Fact]
+    public void A_collectable_without_Collect_learned_is_refused_and_names_the_quest()
+    {
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, _) = Make([target], knows: id => id != FishingRun.Collect);
+        run.Begin(target, 1, Hole, [new StandPoint { X = 1 }], new HoleMemory(), collectability: 400);
+        Assert.Equal(FishingRunState.Faulted, run.State);
+        Assert.Contains("Inscrutable Tastes", run.FailReason);
     }
 }

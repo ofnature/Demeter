@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Dalamud.Game;
 using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
@@ -8,7 +9,9 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Demeter.Services.Fishing;
+using Demeter.Services.Gathering;
 
 namespace Demeter.Services.Game;
 
@@ -40,15 +43,20 @@ public sealed unsafe class GameFisherWorld : IFisherWorld, IDisposable
     private const string TugSignature = "48 8D 35 ?? ?? ?? ?? 4C 8B CE";
 
     private readonly GameBasics _basics;
+    private readonly GameGatherWorld _gather;
+    private readonly IGameGui _gameGui;
     private readonly IObjectTable _objectTable;
     private readonly Action<string> _log;
     private readonly nint _tugAddress;
     private readonly Hook<AgentCatch.Delegates.UpdateCatch>? _catchHook;
     private readonly ConcurrentQueue<Fishing.Catch> _catches = new();
 
-    public GameFisherWorld(GameBasics basics, IObjectTable objectTable, ISigScanner sigScanner, IGameInteropProvider interop, Action<string> log)
+    public GameFisherWorld(GameBasics basics, GameGatherWorld gather, IGameGui gameGui, IObjectTable objectTable,
+        ISigScanner sigScanner, IGameInteropProvider interop, Action<string> log)
     {
         _basics = basics;
+        _gather = gather;
+        _gameGui = gameGui;
         _objectTable = objectTable;
         _log = log;
 
@@ -215,6 +223,53 @@ public sealed unsafe class GameFisherWorld : IFisherWorld, IDisposable
     }
 
     public void Log(string message) => _log(message);
+
+    public int CollectableCount(uint itemId, int minimumCollectability) => _gather.CollectableCount(itemId, minimumCollectability);
+
+    /// <summary>
+    /// The "keep as a collectable?" yes/no. GatherBuddy Reborn's reading (AutoGather.FishingCollectable,
+    /// Apache-2.0): the item is value 14, 500,000 above its id; the collectability is the first number
+    /// in the prompt's text (value 0).
+    /// </summary>
+    public (uint ItemId, int Collectability)? CollectablePrompt
+    {
+        get
+        {
+            try
+            {
+                var addon = _gameGui.GetAddonByName("SelectYesno");
+                if (addon.IsNull || !addon.IsVisible)
+                    return null;
+                var unit = (AtkUnitBase*)addon.Address;
+                if (unit->AtkValuesCount < 15)
+                    return null;
+                var encoded = unit->AtkValues[14].UInt;
+                if (encoded < 500_000)
+                    return null;
+                var text = unit->AtkValues[0].GetValueAsString();
+                var number = Regex.Match(text, @"\d+");
+                return number.Success && int.TryParse(number.Value, out var value) ? (encoded - 500_000, value) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    public void AnswerCollectable(bool keep)
+    {
+        try
+        {
+            var addon = _gameGui.GetAddonByName("SelectYesno");
+            if (!addon.IsNull && addon.IsVisible)
+                ((AtkUnitBase*)addon.Address)->FireCallbackInt(keep ? 0 : 1);
+        }
+        catch (Exception ex)
+        {
+            _log($"Answering the collectable prompt failed: {ex.Message}");
+        }
+    }
 
     private void OnCatch(AgentCatch* thisPtr, uint itemId, bool isLarge, ushort size, byte amount, byte level, byte stars,
         byte oceanStars, bool isMoochable, bool isFirstTimeCatch, byte a11, byte a12)

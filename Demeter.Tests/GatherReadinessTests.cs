@@ -42,11 +42,11 @@ public class GatherReadinessTests
     }
 
     [Fact]
-    public void Fish_are_a_no_until_Demeter_fishes()
+    public void A_fish_is_a_no_for_the_node_gatherer_the_fisher_answers_for_it()
     {
         var why = GatherReadiness.WhyNot(Node(GatherReadiness.Fisher, 1), Levels(miner: 100, botanist: 100), "Dusk Bass");
         Assert.NotNull(why);
-        Assert.Contains("does not fish", why);
+        Assert.Contains("the fisher answers for it", why);
     }
 
     [Fact]

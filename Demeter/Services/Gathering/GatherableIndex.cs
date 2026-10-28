@@ -51,6 +51,21 @@ public sealed class GatherableIndex
         }
     }
 
+    /// <summary>
+    /// Add more searchable items — the fish, which are not in <c>GatheringItem</c>. Names already
+    /// known keep their first spelling.
+    /// </summary>
+    public void Include(IEnumerable<(uint Id, string Name)> rows)
+    {
+        foreach (var (id, name) in rows)
+        {
+            if (id == 0 || name.Length == 0 || !_names.TryAdd(id, name))
+                continue;
+            _items.Add((id, name));
+        }
+        _items.Sort(Order);
+    }
+
     public int Count => _items.Count;
 
     public string NameOf(uint itemId) => _names.TryGetValue(itemId, out var name) ? name : $"item {itemId}";

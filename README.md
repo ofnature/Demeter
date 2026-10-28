@@ -14,6 +14,10 @@ Odysseus's quest gathers and custom deliveries, and your own gather lists.
   node spawns. If something attacks on the way, Daedalus fights it and Demeter waits.
 - **Collectables.** Demeter works a collectable to the collectability asked for and banks it. It
   never banks one below that band and never spends integrity pushing past it.
+- **Fishing.** Fish go on the gather lists like anything else. Demeter picks the hole, stands
+  where people actually fished from, puts on the bait, judges every bite by its timing and tug,
+  moochs, catches predators for Fisher's Intuition, and waits out weather and time windows.
+  Collectable fish are kept only at the collectability asked for. `/demeter fish` looks any fish up.
 - **For other plugins.** Every gate is listed in [For other plugins](#for-other-plugins) below.
 
 Companion to Daedalus and Odysseus. AGPL-3.0; see `NOTICE.md` for third-party data.
