@@ -417,4 +417,29 @@ public class FishingRunTests
         Assert.Equal(FishingRunState.Faulted, run.State);
         Assert.Contains("Inscrutable Tastes", run.FailReason);
     }
+
+    [Fact]
+    public void Asked_to_stop_after_the_cast_it_lands_what_bites_and_casts_no_more()
+    {
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, pond) = Make([target]);
+        pond.Script[Bait] = new([(Target, 17), (Target, 16)]);
+        pond.Tugs[Target] = Tug.Heavy;
+
+        run.Begin(target, 2, Hole, [new StandPoint { X = 1 }], new HoleMemory());
+        for (var i = 0; i < 200 && !(run.State == FishingRunState.Fishing && pond.State == FishState.LineInWater); i++)
+        {
+            run.Tick();
+            pond.Advance(0.5);
+        }
+        Assert.Equal(FishState.LineInWater, pond.State);
+        run.StopAfterCast();
+        run.StopAfterCast();   // asking again changes nothing
+
+        Assert.Equal(FishingRunState.Done, Run(run, pond));
+        Assert.Equal(1, pond.Bag[Target]);                    // the bite on the line was landed
+        Assert.Single(pond.Actions, a => a == FishingRun.Cast);   // and no second cast
+        Assert.Equal(FishState.None, pond.State);             // reeled in
+        Assert.Single(pond.Logged, m => m.Contains("Stopping after this cast"));
+    }
 }

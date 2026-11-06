@@ -753,4 +753,36 @@ public class GatherRunnerTests
         Assert.Equal(GatherRunState.Done, runner.State);
         Assert.DoesNotContain(22185u, world.Actions);
     }
+
+    [Fact]
+    public void Asked_to_stop_after_the_node_it_works_that_node_out_and_goes_no_further()
+    {
+        // Two spots, so a run left alone would carry on to the next one after this node.
+        var here = new Vector3(10, 0, 10);
+        var target = Target(here, here);
+        var (runner, world) = Ready(target);
+        world.PlainNode = true;
+        world.Integrity = 2;
+
+        runner.Begin(target, count: 5, minimumCollectability: 0);
+        for (var i = 0; i < 40 && runner.State != GatherRunState.Working; i++) { runner.Tick(); world.Advance(0.5); }
+        Assert.Equal(GatherRunState.Working, runner.State);
+        runner.StopAfterNode();
+        runner.StopAfterNode();   // asking again changes nothing
+
+        for (var i = 0; i < 40 && runner.State != GatherRunState.Idle; i++) { runner.Tick(); world.Advance(0.5); }
+        Assert.Equal(GatherRunState.Idle, runner.State);
+        Assert.Equal(2, world.Held);          // both attempts used, not walked away from
+        Assert.False(world.NodeOpen);
+        Assert.Equal(1, world.Interacts);
+        Assert.Contains(world.Log, m => m.Contains("stopping there, as asked"));
+        Assert.DoesNotContain(world.Log, m => m.Contains("trying the next"));
+
+        // A fresh start is not still stopping.
+        world.Spawned.Add(target.NodeId);
+        world.Integrity = 5;
+        runner.Begin(target, count: 2, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Equal(GatherRunState.Done, runner.State);
+    }
 }

@@ -104,6 +104,7 @@ public sealed class GatherListRunner
         _outcomes.Clear();
         _timedTries.Clear();
         _current = null;
+        StopAfterRunRequested = false;
         // Zone order, unknown zones last; stable within a zone so the list's own order holds.
         foreach (var kv in shortItems.OrderBy(kv => _gatherer.ZoneOf(kv.Key) ?? uint.MaxValue))
             _queue.Enqueue((kv.Key, kv.Value));
@@ -126,6 +127,28 @@ public sealed class GatherListRunner
         _current = null;
         State = GatherListRunState.Idle;
         Status = "Stopped.";
+    }
+
+    /// <summary>
+    /// This run was asked to stop after its node: it ends Idle once that node (or cast) is finished,
+    /// and nothing follows it — no next item, no going home. Kept until the next <see cref="Begin"/>.
+    /// </summary>
+    public bool StopAfterRunRequested { get; private set; }
+
+    /// <summary>
+    /// Finish the node or cast in hand, then stop. False, with nothing armed, when no run is going.
+    /// Asking again changes nothing.
+    /// </summary>
+    public bool RequestStopAfterRun()
+    {
+        if (State != GatherListRunState.Running)
+            return false;
+        if (!StopAfterRunRequested)
+            _log("Gather lists: stopping after the node in hand, as asked.");
+        StopAfterRunRequested = true;
+        if (_current is not null)
+            _gatherer.RequestStopAfterRun();
+        return true;
     }
 
     public void Tick()
@@ -163,6 +186,13 @@ public sealed class GatherListRunner
 
         if (_current is null)
         {
+            if (StopAfterRunRequested)
+            {
+                Stop();
+                Status = "Stopped after the node, as asked.";
+                _log($"Gather lists: {Status}");
+                return;
+            }
             StartNext();
             return;
         }
@@ -172,7 +202,7 @@ public sealed class GatherListRunner
 
         // A timed node has opened while an ordinary item is in hand: finish the node being worked,
         // go for the timed one while it is up, then come back — the ordinary node will still be there.
-        if (!_currentTimed && _gatherer.Busy && !_gatherer.Faulted && ReadyTimed() is { } timed)
+        if (!_currentTimed && !StopAfterRunRequested && _gatherer.Busy && !_gatherer.Faulted && ReadyTimed() is { } timed)
         {
             if (!_yielding)
             {
@@ -200,7 +230,7 @@ public sealed class GatherListRunner
             if (_currentTimed && _gatherer.UpFor(item, _now()) is { } left)
                 _workedUntil[item] = _now() + left;
             // A timed node's window can close mid-run; the next one is another chance, a few times.
-            if (short_ && WaitOf(item, _now()) is not null
+            if (short_ && !StopAfterRunRequested && WaitOf(item, _now()) is not null
                 && _timedTries.GetValueOrDefault(item) < MaxTimedWindows)
             {
                 _log($"{_nameOf(item)}: {_held(item)}/{target} when its window ended — back in the queue for the next one.");
@@ -208,7 +238,9 @@ public sealed class GatherListRunner
                 _current = null;
                 return;
             }
-            Finish(item, target, _gatherer.Faulted ? $"gave up: {_gatherer.Status}" : short_ ? "the nodes ran out short" : "done");
+            Finish(item, target, _gatherer.Faulted ? $"gave up: {_gatherer.Status}"
+                : short_ ? StopAfterRunRequested ? "stopped after the node, as asked" : "the nodes ran out short"
+                : "done");
             return;
         }
         Status = $"{_nameOf(item)} {_held(item)}/{target} — {_gatherer.Status}";

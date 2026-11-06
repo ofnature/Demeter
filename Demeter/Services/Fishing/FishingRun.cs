@@ -152,6 +152,7 @@ public sealed class FishingRun
         _mooching = 0;
         _lineInSeen = false;
         FailReason = string.Empty;
+        _stopAfterCast = false;
         if (target.IsSpearfish || target.IsOcean)
         {
             Fault($"{Name(target.Id)} is {(target.IsSpearfish ? "spearfished" : "an ocean voyage catch")} — not fished from a hole");
@@ -191,6 +192,34 @@ public sealed class FishingRun
         Status = string.Empty;
     }
 
+    /// <summary>Set by <see cref="StopAfterCast"/>: the cast in hand is the last. Begin clears it.</summary>
+    private bool _stopAfterCast;
+
+    /// <summary>
+    /// Stop at the end of the cast in hand: its bite is judged and a hooked fish landed, then no new
+    /// cast or mooch; the line comes in and the run ends. On the way to the hole it stops as soon as
+    /// no test cast is in the water.
+    /// </summary>
+    public void StopAfterCast()
+    {
+        if (State is not (FishingRunState.Approaching or FishingRunState.Fishing) || _stopAfterCast)
+            return;
+        _stopAfterCast = true;
+        _world.Log("Stopping after this cast, as asked.");
+        if (State == FishingRunState.Approaching)
+        {
+            _approach.StopWhenFree();
+            if (!_approach.Busy)
+                StoppedOnTheWay();
+        }
+    }
+
+    private void StoppedOnTheWay()
+    {
+        Status = "Stopped on the way to the hole, as asked.";
+        State = FishingRunState.Idle;
+    }
+
     public FishingRunState Tick()
     {
         var now = _world.UtcNow;
@@ -200,6 +229,9 @@ public sealed class FishingRun
                 Status = _approach.Status;
                 switch (_approach.Tick())
                 {
+                    case HoleApproachState.Ready or HoleApproachState.Idle when _stopAfterCast:
+                        StoppedOnTheWay();
+                        break;
                     case HoleApproachState.Ready:
                         State = FishingRunState.Fishing;
                         _lastChange = now;
@@ -321,6 +353,12 @@ public sealed class FishingRun
                 _promptAnswered = false;
                 if (_world.IsOccupied || now - _lastAction < ActionGap)
                     break;
+                // The cast asked to be the last is in (a press still in flight has had its gap to show).
+                if (_stopAfterCast)
+                {
+                    Finish($"Stopped after the cast, as asked — {Math.Max(0, Gathered)} of {_wanted} caught.");
+                    return;
+                }
                 NextCast(now, immediate, path, why);
                 break;
         }

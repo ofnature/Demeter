@@ -123,6 +123,18 @@ public sealed class ItemGateway
         _gatherer.Stop();
     }
 
+    /// <summary>
+    /// Finish the node or cast in hand, then stop; <see cref="IsRunning"/> falls once the character
+    /// is free. False when no request is in hand. A new <see cref="Start"/> clears it.
+    /// </summary>
+    public bool RequestStopAfterRun()
+    {
+        if (!IsRunning)
+            return false;
+        _gatherer.RequestStopAfterRun();
+        return true;
+    }
+
     /// <summary>Every frame. Drives the gatherer while ours, and lets go once it has finished (closing included).</summary>
     public void Tick()
     {

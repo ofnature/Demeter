@@ -159,7 +159,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _debugWindow is null ? null : () => _debugWindow.IsOpen = true,
                 StopAll));
 
-            _ipc = new DemeterIpc(PluginInterface, IsBusy, _gateway, _items, ToggleLists);
+            _ipc = new DemeterIpc(PluginInterface, IsBusy, RequestStopAfterRun, _gateway, _items, ToggleLists);
 
             _windowSystem.AddWindow(_mainWindow);
             _windowSystem.AddWindow(_listsWindow);
@@ -270,8 +270,34 @@ public sealed class DemeterPlugin : IDalamudPlugin
         _ownLog?.Dispose();
     }
 
-    /// <summary>Anything Demeter is driving — what <c>Demeter.IsBusy</c> answers, and what Daedalus fights for.</summary>
-    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy);
+    /// <summary>
+    /// Anything Demeter is driving — what <c>Demeter.IsBusy</c> answers, and what Daedalus fights for.
+    /// A trip home still to be sent after a finished run counts: it moves the character on its own.
+    /// </summary>
+    private bool IsBusy() => _config.Enabled && (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
+                             || _homeCommand is not null;
+
+    /// <summary>
+    /// <c>Demeter.RequestStopAfterRun</c>: finish the node or cast in hand, then stop and stay stopped —
+    /// no next node, item or cast, and no trip home. Each runner keeps the request until it stops or is
+    /// started afresh. False, with nothing armed, when Demeter is idle; asking again changes nothing.
+    /// </summary>
+    private bool RequestStopAfterRun()
+    {
+        if (!IsBusy())
+            return false;
+        _homeCommand = null;
+        _lists.RequestStopAfterRun();
+        _items.RequestStopAfterRun();
+        if (_fishingDirect)
+        {
+            if (_fishing.Busy)
+                _fishing.StopAfterCast();
+            else
+                _approach.StopWhenFree();
+        }
+        return true;
+    }
 
     /// <summary>Going to a hole, or fishing at one — whoever started it.</summary>
     private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true;
@@ -367,11 +393,12 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 SaveConfig();
                 Say($"Gather lists: removed {pruned} completed item(s).");
             }
-            // Going home is for a run that finished, not one you stopped. A request says for itself
+            // Going home is for a run that finished, not one you stopped (or asked to stop after its
+            // node: whoever asked is about to move the character). A request says for itself
             // whether to go home; the player's "Afterwards" is for the player's own runs, and sending
             // a crafter to the estate between crafts is not one.
             var requested = _gateway.TakeEndedRequest(out var requestWantsHome);
-            if (_lists.State == GatherListRunState.Done && (!requested || requestWantsHome))
+            if (_lists.State == GatherListRunState.Done && !_lists.StopAfterRunRequested && (!requested || requestWantsHome))
                 _homeCommand = GatherHomeCommands.For(_config.GatherHome);
         }
         // Sent once the character can act — the last node's window has only just shut.

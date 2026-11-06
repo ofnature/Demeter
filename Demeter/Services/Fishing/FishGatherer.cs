@@ -199,6 +199,8 @@ public sealed class FishGatherer : IOwnGatherer
 
     public void Stop() => _run.Cancel();
 
+    public void RequestStopAfterRun() => _run.StopAfterCast();
+
     private static string Span(TimeSpan t) => t.TotalHours >= 1 ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}" : $"{t.Minutes}:{t.Seconds:00}";
 }
 
@@ -256,4 +258,5 @@ public sealed class CompositeGatherer : IOwnGatherer
     public bool DryRun { get => _nodes.DryRun; set => _nodes.DryRun = value; }
     public bool ProbeOnly { get => _nodes.ProbeOnly; set => _nodes.ProbeOnly = value; }
     public void Stop() => Current.Stop();
+    public void RequestStopAfterRun() => Current.RequestStopAfterRun();
 }

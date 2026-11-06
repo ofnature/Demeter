@@ -101,6 +101,7 @@ public sealed class HoleApproach
         _index = 0;
         _tried = 0;
         FailReason = string.Empty;
+        _stopWhenFree = false;
         if (_stands.Count == 0)
         {
             Fault($"{hole.Name}: no stand point is known for this hole (none recorded, or every one failed before)");
@@ -116,6 +117,27 @@ public sealed class HoleApproach
             _world.Quit();
         State = HoleApproachState.Idle;
         Status = string.Empty;
+    }
+
+    /// <summary>Set by <see cref="StopWhenFree"/>: no next stand point, no line left in. Begin clears it.</summary>
+    private bool _stopWhenFree;
+
+    /// <summary>
+    /// Stop as soon as no line is in the water: now when switching class, on the way or facing the
+    /// water; otherwise once the test cast is reeled in, with no next stand point tried.
+    /// </summary>
+    public void StopWhenFree()
+    {
+        if (State is HoleApproachState.SwitchingJob or HoleApproachState.Travelling or HoleApproachState.Facing)
+            StopAsAsked();
+        else if (Busy)
+            _stopWhenFree = true;
+    }
+
+    private void StopAsAsked()
+    {
+        Cancel();
+        Status = "Stopped, as asked.";
     }
 
     public HoleApproachState Tick()
@@ -192,7 +214,7 @@ public sealed class HoleApproach
             _memory!.Worked(stand);
             _saveMemory();
             _world.Log($"{_hole!.Name}: fishing works from ({stand.X:F1}, {stand.Y:F1}, {stand.Z:F1}).");
-            if (KeepFishing)
+            if (KeepFishing && !_stopWhenFree)
             {
                 Status = $"{_hole.Name}: line in the water.";
                 State = HoleApproachState.Ready;
@@ -238,6 +260,11 @@ public sealed class HoleApproach
         _memory!.Failed(stand);
         _saveMemory();
         _world.Log($"{_hole!.Name}, stand point {_index + 1}: {why}.");
+        if (_stopWhenFree)
+        {
+            StopAsAsked();
+            return;
+        }
         _index++;
         _tried++;
         if (_index >= _stands.Count || _tried >= MaxStands)

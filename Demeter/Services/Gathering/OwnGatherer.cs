@@ -73,6 +73,12 @@ public interface IOwnGatherer
     bool ProbeOnly { get; set; }
 
     void Stop();
+
+    /// <summary>
+    /// Finish the node or cast in hand, then stop: no next spot, no next cast. <see cref="Busy"/>
+    /// falls once the character is free; <see cref="Start"/> clears it. Without a gentler way, stop now.
+    /// </summary>
+    void RequestStopAfterRun() => Stop();
 }
 
 /// <summary>
@@ -176,4 +182,6 @@ public sealed class OwnGatherer : IOwnGatherer
     public bool ProbeOnly { get => _runner.ProbeOnly; set => _runner.ProbeOnly = value; }
 
     public void Stop() => _runner.Cancel();
+
+    public void RequestStopAfterRun() => _runner.StopAfterNode();
 }

@@ -64,8 +64,9 @@ are matched case-blind on the way in).
 
 | Gate | Type | Meaning |
 |---|---|---|
-| `Demeter.IsBusy` | `Func<bool>` | Demeter is driving the character: a list run (yours or a plugin's) or a single item. Daedalus's busy bridge polls it. |
-| `Demeter.GetVersion` | `Func<int>` | The IPC version, currently `1`. It goes up when gates are added. |
+| `Demeter.IsBusy` | `Func<bool>` | Demeter is driving the character: a list run (yours or a plugin's), a single item or fishing, including the node or cast it is finishing after a stop, and a trip home about to be sent after a finished run. Daedalus's busy bridge polls it. |
+| `Demeter.RequestStopAfterRun` | `Func<bool>` | Finish the node visit or cast in hand, then stop and stay stopped: no next spot, list item or cast, no trip home. On the way to a node or hole it stops at once. `true` when Demeter was busy and will stop (or already is stopping); `false` when idle, with nothing left armed. Asking again changes nothing. A fresh start clears it. Wait for `Demeter.IsBusy` to read false. |
+| `Demeter.GetVersion` | `Func<int>` | The IPC version, currently `2`. It goes up when gates are added. |
 | `Demeter.Ui.ToggleLists` | `Action` | Show or hide the gather lists window. |
 
 ### List level: a caller's own named list

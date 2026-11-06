@@ -14,5 +14,6 @@
 - Fish on the gather lists: add a fish like any item. Weather- and time-bound fish wait their window while the rest is gathered, and a fish whose window opens is gone for straight away. The best hole is chosen for you: in reach of your Fisher level, open now if any is, the most-fished otherwise
 - Collectable fish: Collect goes on for a collectable ask, and each catch is kept only at the collectability asked for — so Odysseus's custom-delivery fish, and Hephaestus's and Odysseus's quest fish, are fished through the same gates as gathered items
 - IPC for other plugins: `Demeter.Gather.*` for a caller's own named list (Hephaestus) and `Demeter.Item.*` for one item (Odysseus), plus `Demeter.IsBusy` for Daedalus. `Demeter.Gather.SetList` is new: it hands a list over without starting it
+- `Demeter.RequestStopAfterRun` (IPC version 2): finish the node or cast in hand, then stop and stay stopped, for a plugin about to move the character (Argus's unattended resend). `Demeter.IsBusy` now also covers a trip home about to be sent
 
 <!-- LATEST-END -->

@@ -301,7 +301,33 @@ public sealed class GatherRunner
         _currentNode = target.NodeId;
         _travelTo = default;
         FailReason = string.Empty;
+        _stopAfterNode = false;
         Enter(GatherRunState.SwitchingJob);
+    }
+
+    /// <summary>Set by <see cref="StopAfterNode"/>: the node in hand is the last. Begin clears it.</summary>
+    private bool _stopAfterNode;
+
+    /// <summary>
+    /// Stop once the node in hand is finished: a node being opened or worked is seen through until
+    /// its window shuts, with no Revisit and no next spot. Switching class or on the way to a node,
+    /// the run stops now. Either way it ends through Closing, so Busy holds until the character is free.
+    /// </summary>
+    public void StopAfterNode()
+    {
+        if (State is GatherRunState.Opening or GatherRunState.Working)
+            _stopAfterNode = true;
+        else if (State is GatherRunState.SwitchingJob or GatherRunState.Travelling or GatherRunState.Walking)
+            StopAsAsked();
+    }
+
+    private void StopAsAsked()
+    {
+        _travel.Cancel();
+        _target = null;
+        _afterClose = GatherRunState.Idle;
+        Enter(GatherRunState.Closing);
+        Status = "Stopped after the node, as asked.";
     }
 
     public void Cancel()
@@ -607,6 +633,13 @@ public sealed class GatherRunner
 
         if (!_world.NodeOpen)
         {
+            // The node asked to be the last is finished: no waiting for a Revisit (NextSpot stops).
+            if (_stopAfterNode)
+            {
+                NextSpot("spent");
+                return;
+            }
+
             // Revisit — the trait that refreshes a depleted node in place. The window shuts
             // either way, so the node gets a moment to come back before the walk to the next
             // spot: live and within reach again means work it again.
@@ -809,6 +842,13 @@ public sealed class GatherRunner
     /// <summary>Nodes move as they are worked, so the next spot is expected, not a failure.</summary>
     private void NextSpot(string why)
     {
+        if (_stopAfterNode)
+        {
+            _world.Log($"Node {_currentNode}: {why}; stopping there, as asked.");
+            StopAsAsked();
+            return;
+        }
+
         _travel.Cancel();
         var was = _stops[_spawn % _stops.Count];
         var index = _spawn % _stops.Count + 1;

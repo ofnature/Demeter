@@ -18,6 +18,12 @@ namespace Demeter.Services.Ipc;
 /// </para>
 ///
 /// <para>
+/// <b><c>Demeter.RequestStopAfterRun</c></b> — the suite's "stop after the run you are in": Argus
+/// asks it of every automation plugin before it moves the character, then waits for
+/// <c>Demeter.IsBusy</c> to read false. Demeter finishes the node or cast in hand and stops there.
+/// </para>
+///
+/// <para>
 /// <b>List level</b> (<c>Demeter.Gather.*</c>) is the shape Hephaestus used on Odysseus's
 /// <c>Odysseus.Gather.*</c>, renamed: the caller's own named list, all-or-nothing validation.
 /// <b>Item level</b> (<c>Demeter.Item.*</c>) is one item for a caller that drives its own flow —
@@ -27,9 +33,10 @@ namespace Demeter.Services.Ipc;
 public sealed class DemeterIpc : IDisposable
 {
     /// <summary>Bumped when a gate is added or a shape changes (extend-only).</summary>
-    public const int ApiVersion = 1;
+    public const int ApiVersion = 2;
 
     public const string IsBusyGate = "Demeter.IsBusy";
+    public const string RequestStopAfterRunGate = "Demeter.RequestStopAfterRun";
     public const string GetVersionGate = "Demeter.GetVersion";
     public const string ToggleListsGate = "Demeter.Ui.ToggleLists";
 
@@ -48,6 +55,7 @@ public sealed class DemeterIpc : IDisposable
     public const string ItemStatusGate = "Demeter.Item.GetStatusJson";
 
     private readonly ICallGateProvider<bool> _isBusy;
+    private readonly ICallGateProvider<bool> _requestStopAfterRun;
     private readonly ICallGateProvider<int> _version;
     private readonly ICallGateProvider<object?> _toggleLists;
     private readonly ICallGateProvider<uint, bool> _gatherCanGather;
@@ -64,14 +72,18 @@ public sealed class DemeterIpc : IDisposable
     private readonly ICallGateProvider<string> _itemStatus;
 
     /// <param name="isBusy">Anything Demeter is driving. Read live; never latched.</param>
+    /// <param name="requestStopAfterRun">Stop after the node or cast in hand; false (nothing armed) when idle.</param>
     /// <param name="gather">The list-level gateway: a caller's own named list.</param>
     /// <param name="items">The item-level gateway: one item, for a caller driving its own flow.</param>
     /// <param name="toggleLists">Show or hide the gather lists window.</param>
-    public DemeterIpc(IDalamudPluginInterface pluginInterface, Func<bool> isBusy, GatherGateway gather, ItemGateway items,
-        Action toggleLists)
+    public DemeterIpc(IDalamudPluginInterface pluginInterface, Func<bool> isBusy, Func<bool> requestStopAfterRun,
+        GatherGateway gather, ItemGateway items, Action toggleLists)
     {
         _isBusy = pluginInterface.GetIpcProvider<bool>(IsBusyGate);
         _isBusy.RegisterFunc(() => Guard(isBusy, false));
+
+        _requestStopAfterRun = pluginInterface.GetIpcProvider<bool>(RequestStopAfterRunGate);
+        _requestStopAfterRun.RegisterFunc(() => Guard(requestStopAfterRun, false));
 
         _version = pluginInterface.GetIpcProvider<int>(GetVersionGate);
         _version.RegisterFunc(() => ApiVersion);
@@ -122,6 +134,7 @@ public sealed class DemeterIpc : IDisposable
     public void Dispose()
     {
         _isBusy.UnregisterFunc();
+        _requestStopAfterRun.UnregisterFunc();
         _version.UnregisterFunc();
         _toggleLists.UnregisterAction();
         _gatherCanGather.UnregisterFunc();

@@ -41,6 +41,9 @@ public class GatherListRunnerTests
         public bool ProbeOnly { get; set; }
         public void Stop() { Stops++; Busy = false; }
 
+        /// <summary>Asked to stop after its node: one more in the bag, then it is done.</summary>
+        public void RequestStopAfterRun() => _left = Math.Min(_left, 1);
+
         /// <summary>Item → when its timed node is next up; absent means not timed.</summary>
         public Dictionary<uint, DateTime> UpAt { get; } = new();
         /// <summary>Items whose window closes on them: the gather stops after one each time.</summary>
@@ -315,5 +318,37 @@ public class GatherListRunnerTests
         Assert.Equal(1, own.Stops);
         Assert.Equal(GatherListRunState.Idle, runner.State);
         Assert.Null(runner.CurrentItem);
+    }
+
+    /// <summary>
+    /// Argus's unattended resend asks before it moves the character: the node in hand is finished,
+    /// nothing after it starts, and an ask while idle leaves nothing behind to stop the next run.
+    /// </summary>
+    [Fact]
+    public void Asked_to_stop_after_its_run_it_finishes_the_node_in_hand_and_starts_nothing_else()
+    {
+        var (runner, own, log) = Make();
+        Assert.False(runner.RequestStopAfterRun());   // idle: nothing to stop, nothing armed
+
+        Assert.True(runner.Begin([List("l", (10, 50), (11, 5))]));
+        runner.Tick();   // starts item 10
+        Assert.True(runner.RequestStopAfterRun());
+        Assert.True(runner.RequestStopAfterRun());   // asking again is not a toggle
+        Run(runner);
+
+        Assert.Equal(GatherListRunState.Idle, runner.State);   // stopped, not Done: no trip home
+        Assert.True(runner.StopAfterRunRequested);
+        Assert.Single(own.Starts);                             // item 11 never started
+        Assert.Equal(1, own.Bag[10]);                          // the node in hand was finished
+        Assert.Equal(0, own.Stops);                            // and not cut short
+        Assert.Equal("stopped after the node, as asked", Assert.Single(runner.Outcomes).Note);
+        Assert.Single(log, m => m.Contains("stopping after the node in hand"));
+
+        // A fresh start is not still stopping.
+        Assert.True(runner.Begin([List("l", (10, 50), (11, 5))]));
+        Assert.False(runner.StopAfterRunRequested);
+        Run(runner);
+        Assert.Equal(GatherListRunState.Done, runner.State);
+        Assert.Equal(5, own.Bag[11]);
     }
 }
