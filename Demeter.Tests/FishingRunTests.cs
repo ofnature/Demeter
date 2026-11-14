@@ -85,7 +85,7 @@ public class FishingRunTests
     /// the bait (or mooched fish) comes after its seconds, a hook during the bite lands it, no hook and
     /// it gets away. The bag, the bait, the mooch flag and statuses are all here.
     /// </summary>
-    private sealed class Pond : IFisherWorld, IHoleWorld
+    internal sealed class Pond : IFisherWorld, IHoleWorld
     {
         public DateTime UtcNow { get; set; } = new(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc);
         public bool IsOccupied => false;
@@ -100,6 +100,12 @@ public class FishingRunTests
         public List<uint> Hooked { get; } = [];
         public List<uint> LetGo { get; } = [];
         public List<uint> Actions { get; } = [];
+
+        /// <summary>Every press, with when it came.</summary>
+        public List<(uint Action, DateTime At)> Pressed { get; } = [];
+
+        /// <summary>No water in front: a cast does not go in.</summary>
+        public bool NoWater { get; set; }
         public List<string> Logged { get; } = [];
         public Action<uint>? OnLanded { get; set; }
 
@@ -130,9 +136,10 @@ public class FishingRunTests
         public bool UseAction(uint actionId)
         {
             Actions.Add(actionId);
+            Pressed.Add((actionId, UtcNow));
             switch (actionId)
             {
-                case FishingRun.Cast when State is FishState.None or FishState.PoleReady:
+                case FishingRun.Cast when State is FishState.None or FishState.PoleReady && !NoWater:
                     Line(CurrentBait);
                     break;
                 case FishingRun.Mooch when CanMooch:

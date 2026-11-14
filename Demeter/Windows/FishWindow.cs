@@ -27,6 +27,11 @@ public sealed class FishWindow : DemeterWindow
 
     /// <summary>The bait on the line now (0 for none), and how many of it are in the bags.</summary>
     private readonly Func<(uint Bait, int Count)> _bait;
+
+    /// <summary>"Fish here": the session another plugin would start, from where the character stands.</summary>
+    private readonly FishSession _session;
+    private readonly Func<bool> _fishWhereStanding;
+    private readonly Func<string> _lastRefusal;
     private int _count = 1;
     private readonly List<(uint Id, string Name)> _names;
     private string _filter = string.Empty;
@@ -37,9 +42,13 @@ public sealed class FishWindow : DemeterWindow
 
     public FishWindow(FishCatalog catalog, FishSpots spots, FishingHoles holes, HoleApproach approach,
         Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> fishHere,
-        FishingRun run, Func<bool> otherBusy, Func<(uint Bait, int Count)> bait) : base("Demeter Fish###DemeterFish")
+        FishingRun run, Func<bool> otherBusy, Func<(uint Bait, int Count)> bait,
+        FishSession session, Func<bool> fishWhereStanding, Func<string> lastRefusal) : base("Demeter Fish###DemeterFish")
     {
         _bait = bait;
+        _session = session;
+        _fishWhereStanding = fishWhereStanding;
+        _lastRefusal = lastRefusal;
         _fishHere = fishHere;
         _run = run;
         _catalog = catalog;
@@ -73,6 +82,7 @@ public sealed class FishWindow : DemeterWindow
         DrawBait();
 
         DrawApproach();
+        DrawFishHere();
 
         ImGui.SetNextItemWidth(-1f);
         ImGui.InputTextWithHint("##fishsearch", "Find a fish… (part of its name)", ref _filter, 64);
@@ -212,6 +222,51 @@ public sealed class FishWindow : DemeterWindow
         ImGui.TextColored(colour, $"· Bait: {_spots.ItemName(bait)} ×{count}");
         if (ImGui.IsItemHovered() && wants != 0 && wants != bait)
             ImGui.SetTooltip($"{_spots.ItemName(_selected)} starts with {_spots.ItemName(wants)} — Fish puts it on for you.");
+    }
+
+    /// <summary>
+    /// "Fish here": fish from where you stand with the bait that is on, every bite hooked, at a varied
+    /// pace — what Selene starts through <c>Demeter.Fish.Start</c>, to try by hand.
+    /// </summary>
+    private void DrawFishHere()
+    {
+        if (_session.Busy)
+        {
+            if (DemeterTheme.IconTextButton(Dalamud.Interface.FontAwesomeIcon.Stop, "Stop##fishhere", DemeterTheme.RedDark, "Stop fishing here; the line is reeled in."))
+                _session.Cancel();
+            ImGui.SameLine();
+            ImGui.TextColored(DemeterTheme.WakeFoam, $"Fishing here for {_session.RequestedBy} — {_session.Casts} casts"
+                                                     + (_session.LastBite is { } b ? $" · last bite {b.Seconds:F1}s {b.Tug.ToString().ToLowerInvariant()}" : string.Empty));
+            DrawLanded();
+            return;
+        }
+
+        var busy = _approach.Busy || _run.Busy || _otherBusy();
+        using (ImRaii.Disabled(busy))
+        {
+            if (ImGui.SmallButton("Fish here"))
+                _fishWhereStanding();
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Fish from where you stand, with the bait that is on (Cosmic Exploration's too): every bite hooked, "
+                             + "no bait change, a varied pace. Stops when you press Stop, the bait runs out, or the fish sense something amiss.");
+        ImGui.SameLine();
+        if (_lastRefusal() is { Length: > 0 } refused)
+            ImGui.TextColored(DemeterTheme.StatusRed, $"Can't: {refused}");
+        else if (_session.State is FishSessionState.Done or FishSessionState.StoppedAsAsked or FishSessionState.Faulted)
+        {
+            ImGui.TextColored(_session.State == FishSessionState.Faulted ? DemeterTheme.StatusRed : DemeterTheme.StatusGreen,
+                $"Ended: {_session.Reason} — {_session.Casts} casts.");
+            DrawLanded();
+        }
+        else
+            ImGui.NewLine();
+    }
+
+    private void DrawLanded()
+    {
+        if (_session.Landed.Count > 0)
+            ImGui.TextColored(DemeterTheme.TextSecondary, "Landed: " + string.Join(", ", _session.Landed.Select(kv => $"{_spots.ItemName(kv.Key)} ×{kv.Value}")));
     }
 
     /// <summary>What "Fish" or "Go there" is doing, with a Stop.</summary>

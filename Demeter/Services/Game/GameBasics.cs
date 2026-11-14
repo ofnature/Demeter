@@ -63,6 +63,13 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityStat
 
     public DateTime UtcNow => DateTime.UtcNow;
     public uint TerritoryId => _clientState.TerritoryType;
+
+    /// <summary>
+    /// A Cosmic Exploration zone (Sinus Ardorum, Phaenna, Oizys): TerritoryIntendedUse 60, read from the
+    /// sheet. <c>GameMain.CurrentTerritoryIntendedUseId</c> did not say so on Sinus Ardorum (2026-11-14).
+    /// </summary>
+    public bool InCosmicExploration
+        => _data.GetExcelSheet<TerritoryType>().GetRowOrDefault(_clientState.TerritoryType)?.TerritoryIntendedUse.RowId == 60;
     public Vector3 PlayerPosition => _objectTable.LocalPlayer?.Position ?? Vector3.Zero;
     public void Log(string message) => _log(message);
 

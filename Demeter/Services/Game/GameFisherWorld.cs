@@ -8,6 +8,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
+using FFXIVClientStructs.FFXIV.Client.Game.WKS;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Demeter.Services.Fishing;
@@ -147,16 +148,59 @@ public sealed unsafe class GameFisherWorld : IFisherWorld, IDisposable
         }
     }
 
+    /// <summary>
+    /// In Cosmic Exploration the bait is the mission's, picked in Special Bait &amp; Tackle and held by
+    /// <c>WKSManager</c>, not <c>PlayerState</c> (GatherBuddy Reborn reads it the same way).
+    /// </summary>
     public uint CurrentBait
     {
         get
         {
-            var state = PlayerState.Instance();
-            return state == null ? 0 : state->FishingBait;
+            try
+            {
+                if (_basics.InCosmicExploration)
+                {
+                    var wks = WKSManager.Instance();
+                    return wks == null ? 0 : wks->State.FishingBait;
+                }
+                var state = PlayerState.Instance();
+                return state == null ? 0 : state->FishingBait;
+            }
+            catch
+            {
+                return 0;
+            }
         }
     }
 
-    public int ItemCount(uint itemId) => _basics.ItemCount(itemId);
+    /// <summary>The bags, and the Cosmopouch: Cosmic bait and catches are kept there, not in the bags (seen 2026-11-14).</summary>
+    public int ItemCount(uint itemId)
+    {
+        var count = _basics.ItemCount(itemId);
+        try
+        {
+            var manager = InventoryManager.Instance();
+            if (manager == null)
+                return count;
+            foreach (var type in (ReadOnlySpan<InventoryType>)[InventoryType.Cosmopouch1, InventoryType.Cosmopouch2])
+            {
+                var container = manager->GetInventoryContainer(type);
+                if (container == null)
+                    continue;
+                for (var i = 0; i < container->Size; i++)
+                {
+                    var slot = container->GetInventorySlot(i);
+                    if (slot != null && slot->ItemId == itemId)
+                        count += (int)slot->Quantity;
+                }
+            }
+        }
+        catch
+        {
+            // the bags' count stands
+        }
+        return count;
+    }
 
     /// <summary>The game's own bait switch (command 701, sub 4) — what the bait window sends.</summary>
     public bool ChangeBait(uint baitId)

@@ -53,6 +53,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly HoleApproach _approach = null!;
     private readonly FishingRun _fishing = null!;
     private readonly GameFisherWorld _fisherWorld = null!;
+    private readonly FishSession _session = null!;
+    private readonly FishGateway _fishGate = null!;
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
@@ -113,6 +115,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
             var spots = new FishSpots(DataManager, message => Warn(message));
             _fisherWorld = new GameFisherWorld(_game, gatherWorld, GameGui, ObjectTable, SigScanner, GameInterop, message => Say(message));
             _fishing = new FishingRun(_fisherWorld, _approach, fish, holes, abilities.Knows, spots.RatesFor, spots.ItemName);
+            // Fishing from where the character stands, for a caller that chose the place (Selene's Cosmic missions).
+            _session = new FishSession(_fisherWorld, () => _game.CurrentClassJob == HoleApproach.Fisher, fish, spots.ItemName);
             // Phase 4: fish go wherever gathered items go — the lists, Hephaestus's and Odysseus's gates.
             var fisher = new FishGatherer(fish, spots, holes, _fishing, MemoryFor, _game.LevelOfJob, abilities.Knows)
             {
@@ -146,10 +150,14 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _game.ItemCount,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy,
                 message => Say(message));
+            _fishGate = new FishGateway(_session, () => _config.Enabled,
+                () => _lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy || _fishing.Busy,
+                message => Say(message));
 
             _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning,
-                () => _fisherWorld.CurrentBait is var bait and not 0 ? (bait, _fisherWorld.ItemCount(bait)) : (0u, 0));
+                () => _fisherWorld.CurrentBait is var bait and not 0 ? (bait, _fisherWorld.ItemCount(bait)) : (0u, 0),
+                _session, () => _fishGate.Start("{\"requestedBy\":\"Demeter's Fish window\"}"), () => _fishGate.LastRefusal);
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);
@@ -162,7 +170,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _debugWindow is null ? null : () => _debugWindow.IsOpen = true,
                 StopAll));
 
-            _ipc = new DemeterIpc(PluginInterface, IsBusy, RequestStopAfterRun, _gateway, _items, ToggleLists);
+            _ipc = new DemeterIpc(PluginInterface, IsBusy, RequestStopAfterRun, _gateway, _items, _fishGate, ToggleLists);
 
             _windowSystem.AddWindow(_mainWindow);
             _windowSystem.AddWindow(_listsWindow);
@@ -191,6 +199,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             PluginInterface.UiBuilder.OpenMainUi += OpenMain;
             PluginInterface.UiBuilder.OpenConfigUi += OpenMain;
             Framework.Update += OnFrameworkUpdate;
+            ChatGui.LogMessage += OnLogMessage;
 
             CommandManager.AddHandler(CommandMain, new CommandInfo(OnCommand)
             {
@@ -262,6 +271,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     {
         CommandManager.RemoveHandler(CommandMain);
         Framework.Update -= OnFrameworkUpdate;
+        ChatGui.LogMessage -= OnLogMessage;
         PluginInterface.UiBuilder.Draw -= _windowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi -= OpenMain;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenMain;
@@ -292,6 +302,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
         _homeCommand = null;
         _lists.RequestStopAfterRun();
         _items.RequestStopAfterRun();
+        if (_session.Busy)
+            _session.Stop();
         if (_fishingDirect)
         {
             if (_fishing.Busy)
@@ -303,7 +315,24 @@ public sealed class DemeterPlugin : IDalamudPlugin
     }
 
     /// <summary>Going to a hole, or fishing at one — whoever started it.</summary>
-    private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true;
+    private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true || _session?.Busy == true;
+
+    /// <summary>"The fish sense something amiss. Perhaps it is time to try another location."</summary>
+    private const uint AmissLogMessage = 3516;
+
+    /// <summary>The game's own message by its id, so it is heard in every client language.</summary>
+    private void OnLogMessage(Dalamud.Game.Chat.ILogMessage message)
+    {
+        try
+        {
+            if (message.LogMessageId == AmissLogMessage)
+                _session.Amiss();
+        }
+        catch
+        {
+            // a chat line is never worth a fault
+        }
+    }
 
     /// <summary>The fishing run (or the bare approach) was started from the Fish window, so the frame ticks it.
     /// One started by the lists or a gate is ticked by them, through the gatherer.</summary>
@@ -349,7 +378,14 @@ public sealed class DemeterPlugin : IDalamudPlugin
         }
 
         // The catch report is heard only while a fishing run is going, whoever runs it.
-        _fisherWorld.Listening = _fishing.Busy;
+        _fisherWorld.Listening = _fishing.Busy || _session.Busy;
+
+        // Fishing where the character stands, for a gate caller or the Fish window's "Fish here".
+        if (_session.Busy)
+        {
+            _session.Tick();
+            return;
+        }
 
         // Started from the Fish window: "Fish" (the run ticks its own approach) or "Go there".
         if (_fishingDirect)
@@ -415,6 +451,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
     private void StopAll()
     {
+        if (_session.Busy)
+            _session.Cancel();
         if (_fishing.Busy)
             _fishing.Cancel();
         if (_approach.Busy)

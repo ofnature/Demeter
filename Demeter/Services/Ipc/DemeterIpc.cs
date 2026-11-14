@@ -1,6 +1,7 @@
 using System;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Ipc;
+using Demeter.Services.Fishing;
 using Demeter.Services.Gathering;
 
 namespace Demeter.Services.Ipc;
@@ -29,11 +30,18 @@ namespace Demeter.Services.Ipc;
 /// <b>Item level</b> (<c>Demeter.Item.*</c>) is one item for a caller that drives its own flow —
 /// Odysseus's quest gathers and custom deliveries.
 /// </para>
+///
+/// <para>
+/// <b>Fish here</b> (<c>Demeter.Fish.*</c>, API 3) is fishing from where the character stands, for a
+/// caller that chose the place and keeps its own clock (Selene's Cosmic Exploration missions):
+/// <c>CanFishHere(json)</c> and <c>Start(json)</c> take the same request, <c>Stop</c> ends it after the
+/// cast in hand, <c>GetStatusJson</c> says how it goes and why it ended.
+/// </para>
 /// </summary>
 public sealed class DemeterIpc : IDisposable
 {
     /// <summary>Bumped when a gate is added or a shape changes (extend-only).</summary>
-    public const int ApiVersion = 2;
+    public const int ApiVersion = 3;
 
     public const string IsBusyGate = "Demeter.IsBusy";
     public const string RequestStopAfterRunGate = "Demeter.RequestStopAfterRun";
@@ -54,6 +62,11 @@ public sealed class DemeterIpc : IDisposable
     public const string ItemStopGate = "Demeter.Item.Stop";
     public const string ItemStatusGate = "Demeter.Item.GetStatusJson";
 
+    public const string FishCanFishHereGate = "Demeter.Fish.CanFishHere";
+    public const string FishStartGate = "Demeter.Fish.Start";
+    public const string FishStopGate = "Demeter.Fish.Stop";
+    public const string FishStatusGate = "Demeter.Fish.GetStatusJson";
+
     private readonly ICallGateProvider<bool> _isBusy;
     private readonly ICallGateProvider<bool> _requestStopAfterRun;
     private readonly ICallGateProvider<int> _version;
@@ -70,14 +83,19 @@ public sealed class DemeterIpc : IDisposable
     private readonly ICallGateProvider<uint, int, int, uint, bool> _itemStart;
     private readonly ICallGateProvider<object?> _itemStop;
     private readonly ICallGateProvider<string> _itemStatus;
+    private readonly ICallGateProvider<string, string> _fishCanFishHere;
+    private readonly ICallGateProvider<string, bool> _fishStart;
+    private readonly ICallGateProvider<object?> _fishStop;
+    private readonly ICallGateProvider<string> _fishStatus;
 
     /// <param name="isBusy">Anything Demeter is driving. Read live; never latched.</param>
     /// <param name="requestStopAfterRun">Stop after the node or cast in hand; false (nothing armed) when idle.</param>
     /// <param name="gather">The list-level gateway: a caller's own named list.</param>
     /// <param name="items">The item-level gateway: one item, for a caller driving its own flow.</param>
+    /// <param name="fish">Fishing from where the character stands.</param>
     /// <param name="toggleLists">Show or hide the gather lists window.</param>
     public DemeterIpc(IDalamudPluginInterface pluginInterface, Func<bool> isBusy, Func<bool> requestStopAfterRun,
-        GatherGateway gather, ItemGateway items, Action toggleLists)
+        GatherGateway gather, ItemGateway items, FishGateway fish, Action toggleLists)
     {
         _isBusy = pluginInterface.GetIpcProvider<bool>(IsBusyGate);
         _isBusy.RegisterFunc(() => Guard(isBusy, false));
@@ -129,6 +147,19 @@ public sealed class DemeterIpc : IDisposable
 
         _itemStatus = pluginInterface.GetIpcProvider<string>(ItemStatusGate);
         _itemStatus.RegisterFunc(() => Guard(items.StatusJson, "{}"));
+
+        _fishCanFishHere = pluginInterface.GetIpcProvider<string, string>(FishCanFishHereGate);
+        _fishCanFishHere.RegisterFunc(json => Guard(() => fish.CanFishHere(json),
+            "{\"ok\":false,\"code\":\"busy\",\"reason\":\"Demeter could not say\"}"));
+
+        _fishStart = pluginInterface.GetIpcProvider<string, bool>(FishStartGate);
+        _fishStart.RegisterFunc(json => Guard(() => fish.Start(json), false));
+
+        _fishStop = pluginInterface.GetIpcProvider<object?>(FishStopGate);
+        _fishStop.RegisterAction(() => Guard<object?>(() => { fish.Stop(); return null; }, null));
+
+        _fishStatus = pluginInterface.GetIpcProvider<string>(FishStatusGate);
+        _fishStatus.RegisterFunc(() => Guard(fish.StatusJson, "{}"));
     }
 
     public void Dispose()
@@ -149,6 +180,10 @@ public sealed class DemeterIpc : IDisposable
         _itemStart.UnregisterFunc();
         _itemStop.UnregisterAction();
         _itemStatus.UnregisterFunc();
+        _fishCanFishHere.UnregisterFunc();
+        _fishStart.UnregisterFunc();
+        _fishStop.UnregisterAction();
+        _fishStatus.UnregisterFunc();
     }
 
     /// <summary>Anything our side throws must stay our side; the caller gets the fallback.</summary>
