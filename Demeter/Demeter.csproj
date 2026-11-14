@@ -37,6 +37,10 @@
     <Content Include="Assets\fishing-holes.json.gz" Condition="Exists('Assets\fishing-holes.json.gz')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!-- What each fish scores on each Cosmic mission, recorded by Debug builds (see FishScores). Ours. -->
+    <Content Include="Assets\fish-scores.json" Condition="Exists('Assets\fish-scores.json')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\licenses\Apache-2.0.txt" Condition="Exists('..\licenses\Apache-2.0.txt')">
       <Link>licenses\Apache-2.0.txt</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

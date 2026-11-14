@@ -55,6 +55,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly GameFisherWorld _fisherWorld = null!;
     private readonly FishSession _session = null!;
     private readonly FishGateway _fishGate = null!;
+    private readonly FishScores _scores = null!;
+    private readonly GpMeter _gp = new();
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
@@ -116,7 +118,14 @@ public sealed class DemeterPlugin : IDalamudPlugin
             _fisherWorld = new GameFisherWorld(_game, gatherWorld, GameGui, ObjectTable, SigScanner, GameInterop, message => Say(message));
             _fishing = new FishingRun(_fisherWorld, _approach, fish, holes, abilities.Knows, spots.RatesFor, spots.ItemName);
             // Fishing from where the character stands, for a caller that chose the place (Selene's Cosmic missions).
-            _session = new FishSession(_fisherWorld, () => _game.CurrentClassJob == HoleApproach.Fisher, fish, spots.ItemName);
+            // Points per fish per mission: shipped with a release, added to by a Debug build as it fishes.
+            _scores = FishScores.Load(
+            [
+                Path.Combine(PluginInterface.AssemblyLocation.DirectoryName ?? string.Empty, "Assets", FishScores.FileName),
+                ScoresRecordFile,
+            ], message => Warn(message));
+            _session = new FishSession(_fisherWorld, () => _game.CurrentClassJob == HoleApproach.Fisher, fish, spots.ItemName,
+                abilities.Knows, _scores, () => _fisherWorld.CosmicMission, () => _fisherWorld.CosmicScore);
             // Phase 4: fish go wherever gathered items go — the lists, Hephaestus's and Odysseus's gates.
             var fisher = new FishGatherer(fish, spots, holes, _fishing, MemoryFor, _game.LevelOfJob, abilities.Knows)
             {
@@ -157,7 +166,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning,
                 () => _fisherWorld.CurrentBait is var bait and not 0 ? (bait, _fisherWorld.ItemCount(bait)) : (0u, 0),
-                _session, () => _fishGate.Start("{\"requestedBy\":\"Demeter's Fish window\"}"), () => _fishGate.LastRefusal);
+                _session, () => _fishGate.Start("{\"requestedBy\":\"Demeter's Fish window\"}"), () => _fishGate.LastRefusal, _gp);
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);
@@ -320,13 +329,51 @@ public sealed class DemeterPlugin : IDalamudPlugin
     /// <summary>"The fish sense something amiss. Perhaps it is time to try another location."</summary>
     private const uint AmissLogMessage = 3516;
 
-    /// <summary>The game's own message by its id, so it is heard in every client language.</summary>
+    /// <summary>"You earn a score of N." after a catch on a Cosmic mission.</summary>
+    private const uint ScoreLogMessage = 10804;
+
+    /// <summary>"Your score has changed to N." — a mission scored as a whole reports its running total.</summary>
+    private const uint ScoreTotalLogMessage = 10805;
+
+    /// <summary>"All stellar mission objectives complete!" — the game puts the rod away.</summary>
+    private const uint MissionCompleteLogMessage = 10766;
+
+    /// <summary>The game refusing a cast, by id (the text is the English client's, for the log).</summary>
+    private static readonly Dictionary<uint, string> CastRefusedLogMessages = new()
+    {
+        [10760] = "Unable to fish at this location.",
+        [1109] = "Unable to fish at this time.",
+        [1123] = "Unable to fish. No bait has been specified.",
+    };
+
+    /// <summary>Where a Debug build records the fish scores it sees, beside the config.</summary>
+    private static string ScoresRecordFile => Path.Combine(PluginInterface.ConfigDirectory.FullName, FishScores.FileName);
+
+    /// <summary>The game's own messages by their id, so they are heard in every client language.</summary>
     private void OnLogMessage(Dalamud.Game.Chat.ILogMessage message)
     {
         try
         {
-            if (message.LogMessageId == AmissLogMessage)
+            var id = message.LogMessageId;
+            if (id == AmissLogMessage)
                 _session.Amiss();
+            else if (id == MissionCompleteLogMessage)
+                _session.MissionComplete();
+            else if (CastRefusedLogMessages.TryGetValue(id, out var refused))
+                _session.CastRefused(refused);
+            else if (id == ScoreTotalLogMessage && _session.State != FishSessionState.Idle)
+            {
+                if (message.TryGetIntParameter(0, out var total))
+                    _session.ScoreChanged(total);
+            }
+            else if (id == ScoreLogMessage && _session.State != FishSessionState.Idle)
+            {
+#if DEBUG
+                Say($"Score message: {message.FormatLogMessageForDebugging()}");
+#endif
+                if (message.TryGetIntParameter(0, out var score))
+                    _session.Scored(score);
+            }
         }
         catch
         {
@@ -379,6 +426,15 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
         // The catch report is heard only while a fishing run is going, whoever runs it.
         _fisherWorld.Listening = _fishing.Busy || _session.Busy;
+        _gp.Observe(DateTime.UtcNow, _fisherWorld.Gp, _fisherWorld.MaxGp);
+#if DEBUG
+        // A Debug build records what each fish scores and how long it was, for the release to ship.
+        if (_scores.Dirty)
+        {
+            try { _scores.Save(ScoresRecordFile); }
+            catch (Exception ex) { Warn($"Fish scores could not be saved: {ex.Message}"); }
+        }
+#endif
 
         // Fishing where the character stands, for a gate caller or the Fish window's "Fish here".
         if (_session.Busy)

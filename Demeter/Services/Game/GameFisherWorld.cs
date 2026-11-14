@@ -244,6 +244,57 @@ public sealed unsafe class GameFisherWorld : IFisherWorld, IDisposable
         return false;
     }
 
+    public int StatusStacks(uint statusId)
+    {
+        if (_objectTable.LocalPlayer is not { } player)
+            return 0;
+        foreach (var status in player.StatusList)
+            if (status.StatusId == statusId)
+                return status.Param;
+        return 0;
+    }
+
+    public int Gp => (int)(_objectTable.LocalPlayer?.CurrentGp ?? 0);
+    public int MaxGp => (int)(_objectTable.LocalPlayer?.MaxGp ?? 0);
+
+    /// <summary>The mission in progress's score as the game keeps it (Selene reads the same); 0 for none.</summary>
+    public uint CosmicScore
+    {
+        get
+        {
+            try
+            {
+                if (!_basics.InCosmicExploration)
+                    return 0;
+                var wks = WKSManager.Instance();
+                return wks == null || !wks->IsLoaded ? 0 : wks->State.CurrentMission.ScoreUInt;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
+
+    /// <summary>The mission in progress (WKSMissionUnit row), 0 for none or outside Cosmic Exploration.</summary>
+    public uint CosmicMission
+    {
+        get
+        {
+            try
+            {
+                if (!_basics.InCosmicExploration)
+                    return 0;
+                var wks = WKSManager.Instance();
+                return wks == null ? 0 : (uint)wks->State.CurrentMission.MissionUnitRowId;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
+
     public bool UseAction(uint actionId)
     {
         try
@@ -324,7 +375,8 @@ public sealed unsafe class GameFisherWorld : IFisherWorld, IDisposable
         {
             // Collectables are reported 500,000 above the item id.
             var collectable = itemId > 500_000;
-            _catches.Enqueue(new Fishing.Catch(collectable ? itemId - 500_000 : itemId, Math.Max((int)amount, 1), collectable, isLarge));
+            // The length comes in tenths of an ilm (taken to be; the Debug log shows it beside the chat's).
+            _catches.Enqueue(new Fishing.Catch(collectable ? itemId - 500_000 : itemId, Math.Max((int)amount, 1), collectable, isLarge, size / 10.0));
         }
         catch
         {

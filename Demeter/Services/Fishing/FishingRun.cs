@@ -11,8 +11,8 @@ public enum FishState
     ReleasingCatch = 7, ConfirmingCollectable = 8, AmbitiousLure = 9, ModestLure = 10, Unk11 = 11, LineInWater = 12,
 }
 
-/// <summary>A fish landed, as the catch window reported it.</summary>
-public readonly record struct Catch(uint ItemId, int Amount, bool Collectable, bool Large);
+/// <summary>A fish landed, as the catch window reported it; its length in ilms (0 when not reported).</summary>
+public readonly record struct Catch(uint ItemId, int Amount, bool Collectable, bool Large, double Ilms = 0);
 
 /// <summary>What the fisher needs of the game.</summary>
 public interface IFisherWorld
@@ -31,6 +31,11 @@ public interface IFisherWorld
     bool CanMooch { get; }
     bool CanMooch2 { get; }
     bool HasStatus(uint statusId);
+
+    /// <summary>The stacks of a status on the character (Angler's Art); 0 when it is not up.</summary>
+    int StatusStacks(uint statusId);
+    int Gp { get; }
+    int MaxGp { get; }
     bool UseAction(uint actionId);
 
     /// <summary>Catches reported since the last call, oldest first.</summary>

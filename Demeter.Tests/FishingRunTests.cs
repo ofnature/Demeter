@@ -132,6 +132,13 @@ public class FishingRunTests
         }
 
         public bool HasStatus(uint statusId) => Statuses.Contains(statusId);
+        public Dictionary<uint, int> Stacks { get; } = new();
+
+        /// <summary>Each fish's length when landed, in ilms; none when absent.</summary>
+        public Dictionary<uint, double> Ilms { get; } = new();
+        public int StatusStacks(uint statusId) => Stacks.GetValueOrDefault(statusId);
+        public int Gp { get; set; } = 1000;
+        public int MaxGp { get; set; } = 1000;
 
         public bool UseAction(uint actionId)
         {
@@ -145,7 +152,33 @@ public class FishingRunTests
                 case FishingRun.Mooch when CanMooch:
                     Line(_last);
                     break;
+                case FishSession.IdenticalCast:
+                    Gp -= 350;
+                    Statuses.Add(FishSession.IdenticalStatus);
+                    break;
+                case FishSession.PrizeCatch:
+                    Gp -= 200;
+                    Statuses.Add(FishSession.PrizeStatus);
+                    break;
+                case FishSession.ThaliaksFavor:
+                    Gp = Math.Min(MaxGp, Gp + 150);
+                    Stacks[FishSession.AnglersArt] -= 3;
+                    break;
+                case FishSession.DoubleHook or FishSession.TripleHook when State == FishState.Bite && _bite is { } m:
+                    var amount = actionId == FishSession.TripleHook ? 3 : 2;
+                    Gp -= actionId == FishSession.TripleHook ? 700 : 400;
+                    Statuses.Remove(FishSession.IdenticalStatus);
+                    Hooked.Add(m.Fish);
+                    _last = m.Fish;
+                    _bite = null;
+                    Bag[m.Fish] = Bag.GetValueOrDefault(m.Fish) + amount;
+                    _catches.Add(new Catch(m.Fish, amount, false, false, Ilms.GetValueOrDefault(m.Fish)));
+                    State = FishState.PoleReady;
+                    OnLanded?.Invoke(m.Fish);
+                    break;
                 case FishingRun.Hook when State == FishState.Bite && _bite is { } b:
+                    Statuses.Remove(FishSession.IdenticalStatus);
+                    Statuses.Remove(FishSession.PrizeStatus);
                     Hooked.Add(b.Fish);
                     _last = b.Fish;
                     _bite = null;
@@ -156,7 +189,7 @@ public class FishingRunTests
                         break;
                     }
                     Bag[b.Fish] = Bag.GetValueOrDefault(b.Fish) + 1;
-                    _catches.Add(new Catch(b.Fish, 1, false, false));
+                    _catches.Add(new Catch(b.Fish, 1, false, false, Ilms.GetValueOrDefault(b.Fish)));
                     State = FishState.PoleReady;
                     OnLanded?.Invoke(b.Fish);
                     break;

@@ -37,6 +37,9 @@ public class FishGathererTests
         public bool CanMooch => false;
         public bool CanMooch2 => false;
         public bool HasStatus(uint statusId) => false;
+        public int StatusStacks(uint statusId) => 0;
+        public int Gp => 0;
+        public int MaxGp => 0;
         public bool UseAction(uint actionId) => true;
         public IReadOnlyList<Catch> TakeCatches() => [];
         public int CollectableCount(uint itemId, int minimumCollectability) => 0;

@@ -32,6 +32,7 @@ public sealed class FishWindow : DemeterWindow
     private readonly FishSession _session;
     private readonly Func<bool> _fishWhereStanding;
     private readonly Func<string> _lastRefusal;
+    private readonly GpMeter _gp;
     private int _count = 1;
     private readonly List<(uint Id, string Name)> _names;
     private string _filter = string.Empty;
@@ -43,8 +44,9 @@ public sealed class FishWindow : DemeterWindow
     public FishWindow(FishCatalog catalog, FishSpots spots, FishingHoles holes, HoleApproach approach,
         Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> fishHere,
         FishingRun run, Func<bool> otherBusy, Func<(uint Bait, int Count)> bait,
-        FishSession session, Func<bool> fishWhereStanding, Func<string> lastRefusal) : base("Demeter Fish###DemeterFish")
+        FishSession session, Func<bool> fishWhereStanding, Func<string> lastRefusal, GpMeter gp) : base("Demeter Fish###DemeterFish")
     {
+        _gp = gp;
         _bait = bait;
         _session = session;
         _fishWhereStanding = fishWhereStanding;
@@ -80,6 +82,7 @@ public sealed class FishWindow : DemeterWindow
             ImGui.TextColored(DemeterTheme.StatusRed, "· no fish data");
         }
         DrawBait();
+        DrawGp();
 
         DrawApproach();
         DrawFishHere();
@@ -236,6 +239,8 @@ public sealed class FishWindow : DemeterWindow
                 _session.Cancel();
             ImGui.SameLine();
             ImGui.TextColored(DemeterTheme.WakeFoam, $"Fishing here for {_session.RequestedBy} — {_session.Casts} casts"
+                                                     + (_session.MissionScore > 0 ? $" · mission score {_session.MissionScore:N0}" : string.Empty)
+                                                     + (_session.Points > 0 ? $" · {_session.Points:N0} points this session" : string.Empty)
                                                      + (_session.LastBite is { } b ? $" · last bite {b.Seconds:F1}s {b.Tug.ToString().ToLowerInvariant()}" : string.Empty));
             DrawLanded();
             return;
@@ -256,11 +261,24 @@ public sealed class FishWindow : DemeterWindow
         else if (_session.State is FishSessionState.Done or FishSessionState.StoppedAsAsked or FishSessionState.Faulted)
         {
             ImGui.TextColored(_session.State == FishSessionState.Faulted ? DemeterTheme.StatusRed : DemeterTheme.StatusGreen,
-                $"Ended: {_session.Reason} — {_session.Casts} casts.");
+                $"Ended: {_session.Reason} — {_session.Casts} casts{(_session.Points > 0 ? $", {_session.Points:N0} points" : string.Empty)}.");
             DrawLanded();
         }
         else
             ImGui.NewLine();
+    }
+
+    /// <summary>GP now, and how long until full at the rate it has been coming back.</summary>
+    private void DrawGp()
+    {
+        if (_gp.MaxGp <= 0)
+            return;
+        ImGui.SameLine();
+        var full = _gp.Until(_gp.MaxGp);
+        ImGui.TextColored(DemeterTheme.TextSecondary, $"· GP {_gp.Gp}/{_gp.MaxGp}"
+            + (full is { } t && t > TimeSpan.Zero ? $" (full in {Span(t)})" : string.Empty));
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(_gp.PerSecond > 0 ? $"Coming back at {_gp.PerSecond * 60:F0} GP a minute." : "No GP has come back in the last minute.");
     }
 
     private void DrawLanded()

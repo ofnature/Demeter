@@ -28,6 +28,17 @@ public sealed class FishStatusDto
     public Dictionary<string, int> Landed { get; set; } = new();
     public FishBiteDto? LastBite { get; set; }
     public bool Amiss { get; set; }
+
+    /// <summary>Points the game said this session earned.</summary>
+    public int Points { get; set; }
+
+    /// <summary>The mission the scores are kept under; 0 for none.</summary>
+    public uint Mission { get; set; }
+
+    /// <summary>The mission's whole score, as the game keeps it.</summary>
+    public uint MissionScore { get; set; }
+    public int Gp { get; set; }
+    public int MaxGp { get; set; }
 }
 
 public sealed class FishBiteDto
@@ -110,6 +121,11 @@ public sealed class FishGateway
                     ? new FishBiteDto { Seconds = b.Seconds, Tug = b.Tug.ToString().ToLowerInvariant(), Hooked = b.Hooked }
                     : null,
                 Amiss = _session.AmissSeen,
+                Points = _session.Points,
+                Mission = _session.Mission,
+                MissionScore = _session.MissionScore,
+                Gp = _session.Gp,
+                MaxGp = _session.MaxGp,
             });
         }
         catch

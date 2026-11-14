@@ -8,11 +8,15 @@ public class FishSessionTests
 {
     private const uint Bait = 52247, Small = 52218, Big = 52219;
 
-    private static (FishSession Session, Pond Pond) Make(bool fisher = true, IEnumerable<FishInfo>? fish = null)
+    private const uint Mission = 1675;
+
+    private static (FishSession Session, Pond Pond) Make(bool fisher = true, IEnumerable<FishInfo>? fish = null,
+        FishScores? scores = null, Func<uint, bool>? knows = null, Func<uint>? missionScore = null)
     {
         var pond = new Pond { CurrentBait = Bait };
         pond.Bag[Bait] = 999;
-        var session = new FishSession(pond, () => fisher, new FishCatalog(fish ?? []), id => $"item {id}");
+        var session = new FishSession(pond, () => fisher, new FishCatalog(fish ?? []), id => $"item {id}",
+            knows ?? (_ => true), scores ?? new FishScores(), () => Mission, missionScore ?? (() => 0));
         return (session, pond);
     }
 
@@ -202,6 +206,279 @@ public class FishSessionTests
         // Bite to hook: within the range asked, at 50 ms ticks.
         var bites = casts.Select(c => c.AddSeconds(4)).ToList();
         Assert.All(hooks.Zip(bites, (h, b) => (h - b).TotalMilliseconds), ms => Assert.InRange(ms, 200, 1000));
+    }
+
+    // ── points, GP and the special actions ──
+
+    /// <summary>Small scores 100, Big 700 on the mission: Big is the prize.</summary>
+    private static FishScores Known()
+    {
+        var scores = new FishScores();
+        scores.Record(Mission, Small, 100);
+        scores.Record(Mission, Big, 700);
+        return scores;
+    }
+
+    [Fact]
+    public void A_score_after_a_catch_is_recorded_for_that_fish_on_the_mission()
+    {
+        var scores = new FishScores();
+        var (session, pond) = Make(scores: scores);
+        Script(pond, (Big, 5), (Small, 5));
+        pond.OnLanded = fish => session.Scored(fish == Big ? 700 : 100);
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+
+        Assert.Equal(700, scores.Of(Mission, Big)!.Max);
+        Assert.Equal(100, scores.Of(Mission, Small)!.Max);
+        Assert.Equal(800, session.Points);
+        Assert.True(scores.Dirty);
+    }
+
+    [Fact]
+    public void A_running_total_counts_its_rise_and_records_no_fish()
+    {
+        var scores = new FishScores();
+        var (session, pond) = Make(scores: scores);
+        Script(pond, (Big, 5), (Small, 5));
+        var totals = new Queue<int>([5690, 6800]);
+        pond.OnLanded = _ => session.ScoreChanged(totals.Dequeue());
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+
+        Assert.Equal(1110, session.Points);   // the first total is where it stood, not earned here
+        Assert.Empty(scores.Missions);
+    }
+
+    // ── missions that score the largest fish ──
+
+    /// <summary>Scored by length at 100 points an ilm; Small never past 60 ilms, Big the biggest at 116.</summary>
+    private static FishScores Lengths()
+    {
+        var scores = new FishScores();
+        scores.RecordPointsPerIlm(Mission, 100);
+        scores.RecordSize(Mission, Small, 60);
+        scores.RecordSize(Mission, Big, 116);
+        return scores;
+    }
+
+    private static readonly FishInfo[] MissionFish =
+    [
+        new() { Id = Small, Name = "small", Bite = "Weak", Path = [Bait], CosmicMission = (int)Mission },
+        new() { Id = Big, Name = "big", Bite = "Legendary", Path = [Bait], CosmicMission = (int)Mission },
+    ];
+
+    [Fact]
+    public void Lengths_and_what_an_ilm_is_worth_are_learned_from_the_catches_and_the_total()
+    {
+        var scores = new FishScores();
+        var (session, pond) = Make(scores: scores);
+        Script(pond, (Small, 5), (Big, 5));
+        pond.Ilms[Small] = 56.9;
+        pond.Ilms[Big] = 116.0;
+        pond.OnLanded = fish => session.ScoreChanged(fish == Big ? 11600 : 5690);
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+
+        Assert.Equal(116.0, scores.SizeOf(Mission, Big)!.Max);
+        Assert.Equal(56.9, scores.SizeOf(Mission, Small)!.Max);
+        Assert.Equal(100, scores.PointsPerIlmOf(Mission));
+        Assert.True(scores.IsLargestScored(Mission));
+        Assert.True(scores.IsBiggest(Mission, Big));
+    }
+
+    [Fact]
+    public void A_bite_that_cannot_beat_the_score_is_let_go_and_the_biggest_is_always_hooked()
+    {
+        var (session, pond) = Make(fish: MissionFish, scores: Lengths(), missionScore: () => 11600);
+        Script(pond, (Small, 5), (Big, 5));
+        pond.Tugs[Big] = Tug.Heavy;
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+        Assert.Equal([Small], pond.LetGo);
+        Assert.Equal([Big], pond.Hooked);
+        Assert.Contains(pond.Logged, m => m.Contains("never landed longer than 116.0 ilms"));
+    }
+
+    [Fact]
+    public void With_nothing_to_beat_yet_every_bite_is_hooked()
+    {
+        var (session, pond) = Make(fish: MissionFish, scores: Lengths());   // the mission has no score yet
+        Script(pond, (Small, 5));
+        session.Begin(Ask(castBudget: 1));
+        Run(session, pond);
+        Assert.Equal([Small], pond.Hooked);
+    }
+
+    [Fact]
+    public void After_the_biggest_Identical_Cast_and_Prize_Catch_and_no_multi_hook()
+    {
+        var (session, pond) = Make(fish: MissionFish, scores: Lengths());
+        Script(pond, (Big, 5), (Big, 5));
+        pond.Tugs[Big] = Tug.Heavy;
+        pond.Gp = pond.MaxGp = 1000;
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+
+        var presses = pond.Actions.Where(a => a is not FishingRun.Quit).ToList();
+        Assert.Equal([FishingRun.Cast, FishingRun.Hook, FishSession.IdenticalCast, FishSession.PrizeCatch, FishingRun.Cast, FishingRun.Hook], presses);
+        Assert.Equal(1000 - 350 - 200, pond.Gp);
+    }
+
+    [Fact]
+    public void Short_of_GP_for_Prize_Catch_Identical_Cast_goes_alone()
+    {
+        var (session, pond) = Make(fish: MissionFish, scores: Lengths());
+        Script(pond, (Big, 5), (Big, 5));
+        pond.Gp = 400;
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+        Assert.Contains(FishSession.IdenticalCast, pond.Actions);
+        Assert.DoesNotContain(FishSession.PrizeCatch, pond.Actions);
+    }
+
+    [Fact]
+    public void After_a_prize_Identical_Cast_then_Triple_Hook_when_GP_covers_both()
+    {
+        var (session, pond) = Make(scores: Known());
+        Script(pond, (Big, 5), (Big, 5), (Small, 5));
+        pond.Gp = pond.MaxGp = 1050;
+        session.Begin(Ask(castBudget: 3));
+        Run(session, pond);
+
+        var presses = pond.Actions.Where(a => a is not FishingRun.Quit).ToList();
+        Assert.Equal([FishingRun.Cast, FishingRun.Hook, FishSession.IdenticalCast, FishingRun.Cast, FishSession.TripleHook,
+            FishingRun.Cast, FishingRun.Hook], presses);   // not Identical Cast twice running
+        Assert.Equal(4, pond.Bag[Big]);
+        Assert.Equal(1050 - 350 - 700, pond.Gp);
+    }
+
+    [Fact]
+    public void Short_of_GP_it_double_hooks_or_hooks_plainly_and_fishes_on()
+    {
+        var (session, pond) = Make(scores: Known());
+        Script(pond, (Big, 5), (Big, 5), (Big, 5), (Big, 5));
+        pond.Gp = 760;   // Identical Cast, then 410: Double Hook, not Triple
+        session.Begin(Ask(castBudget: 4));
+        Run(session, pond);
+
+        Assert.Contains(FishSession.DoubleHook, pond.Actions);
+        Assert.DoesNotContain(FishSession.TripleHook, pond.Actions);
+        Assert.Single(pond.Actions, a => a == FishSession.IdenticalCast);   // 10 GP left: none again
+        Assert.Equal(4, pond.Actions.Count(a => a == FishingRun.Cast));
+    }
+
+    [Fact]
+    public void A_fish_that_is_not_the_prize_gets_no_Identical_Cast()
+    {
+        var (session, pond) = Make(scores: Known());
+        Script(pond, (Small, 5), (Small, 5));
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+        Assert.DoesNotContain(FishSession.IdenticalCast, pond.Actions);
+    }
+
+    [Fact]
+    public void Unlearned_actions_are_never_pressed()
+    {
+        var (session, pond) = Make(scores: Known(), knows: id => id is FishingRun.Cast or FishingRun.Hook);
+        Script(pond, (Big, 5), (Big, 5));
+        pond.Stacks[FishSession.AnglersArt] = 5;
+        pond.Gp = 100;
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+        Assert.All(pond.Actions, a => Assert.True(a is FishingRun.Cast or FishingRun.Hook or FishingRun.Quit, $"pressed {a}"));
+    }
+
+    [Fact]
+    public void Thaliaks_Favor_at_three_stacks_when_its_GP_fits()
+    {
+        var (session, pond) = Make();
+        Script(pond, (Small, 5), (Small, 5));
+        pond.Gp = 500;
+        pond.MaxGp = 900;
+        pond.Stacks[FishSession.AnglersArt] = 3;
+        session.Begin(Ask(castBudget: 2));
+        Run(session, pond);
+        Assert.Equal(FishSession.ThaliaksFavor, pond.Actions[0]);
+        Assert.Equal(650, pond.Gp);
+
+        var (full, fullPond) = Make();
+        Script(fullPond, (Small, 5));
+        fullPond.Gp = 800;
+        fullPond.MaxGp = 900;   // 150 would spill over
+        fullPond.Stacks[FishSession.AnglersArt] = 3;
+        full.Begin(Ask(castBudget: 1));
+        Run(full, fullPond);
+        Assert.DoesNotContain(FishSession.ThaliaksFavor, fullPond.Actions);
+    }
+
+    [Fact]
+    public void Mission_complete_ends_it_with_its_own_code_and_no_more_casts()
+    {
+        var (session, pond) = Make();
+        Script(pond, (Small, 5), (Small, 5));
+        pond.OnLanded = _ => session.MissionComplete();
+        session.Begin(Ask());
+        Assert.Equal(FishSessionState.Done, Run(session, pond));
+        Assert.Equal(FishSessionCode.MissionComplete, session.Code);
+        Assert.Single(pond.Actions, a => a == FishingRun.Cast);
+    }
+
+    [Fact]
+    public void The_prize_needs_two_known_fish_and_half_the_best_average()
+    {
+        var scores = new FishScores();
+        scores.Record(Mission, Big, 700);
+        Assert.False(scores.IsPrize(Mission, Big));   // nothing to compare with
+        scores.Record(Mission, Small, 100);
+        scores.Record(Mission, 52231, 400);
+        Assert.True(scores.IsPrize(Mission, Big));
+        Assert.True(scores.IsPrize(Mission, 52231));   // 400 >= 350
+        Assert.False(scores.IsPrize(Mission, Small));
+        Assert.False(scores.IsPrize(1676, Big));        // per mission
+    }
+
+    [Fact]
+    public void Recorded_scores_survive_a_save_and_merge_with_what_shipped()
+    {
+        var dir = Directory.CreateTempSubdirectory("demeter-scores").FullName;
+        try
+        {
+            var shipped = new FishScores();
+            shipped.Record(Mission, Big, 600);
+            shipped.Save(Path.Combine(dir, "shipped.json"));
+            var recorded = new FishScores();
+            recorded.Record(Mission, Big, 800);
+            recorded.Record(Mission, Small, 100);
+            recorded.Save(Path.Combine(dir, "recorded.json"));
+
+            var both = FishScores.Load([Path.Combine(dir, "shipped.json"), Path.Combine(dir, "recorded.json"), Path.Combine(dir, "missing.json")]);
+            var big = both.Of(Mission, Big)!;
+            Assert.Equal((2, 600, 800, 700.0), (big.Count, big.Min, big.Max, big.Average));
+            Assert.Equal(1, both.Of(Mission, Small)!.Count);
+            Assert.False(both.Dirty);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void The_GP_meter_counts_what_comes_back_not_what_is_spent()
+    {
+        var meter = new GpMeter();
+        var t = new DateTime(2026, 11, 14, 12, 0, 0, DateTimeKind.Utc);
+        meter.Observe(t, 500, 900);
+        meter.Observe(t.AddSeconds(3), 505, 900);
+        meter.Observe(t.AddSeconds(4), 155, 900);   // spent 350: not a rate
+        meter.Observe(t.AddSeconds(6), 160, 900);
+        meter.Observe(t.AddSeconds(10), 170, 900);
+        Assert.Equal(2.0, meter.PerSecond, 3);       // 20 GP over 10 s
+        Assert.Equal(TimeSpan.FromSeconds(365), meter.Until(900));
+        Assert.Equal(TimeSpan.Zero, meter.Until(100));
+        Assert.Null(new GpMeter().Until(10));
     }
 
     // ── the pace ──
