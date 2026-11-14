@@ -176,6 +176,43 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityStat
     public uint? NearestAttunedAetheryte(uint territoryId, Vector3 near)
         => Attuned(_aetherytes.InTerritory(territoryId, near));
 
+    /// <summary>
+    /// Odysseus's route (GameStepWorld.RouteTo), with one change: on the same network but not at a
+    /// shard, it teleports to the city's crystal first. Lifestream only starts a hop from a shard it
+    /// counts the character as at, and Demeter has no walk-to-the-shard step.
+    /// </summary>
+    public TravelRoute? RouteTo(uint territoryId, Vector3 near)
+    {
+        if (Attuned(_aetherytes.InTerritory(territoryId, near)) is { } direct)
+            return new TravelRoute(direct, null, territoryId);
+
+        // No aetheryte in the zone. It may still be half a city, reachable only across the aethernet.
+        if (_aetherytes.ShardIn(territoryId, near) is not { } shard)
+            return null;
+        if (_aetherytes.GroupOfTerritory(TerritoryId) == shard.Group && _lifestream.ActiveAetheryte != 0)
+            return new TravelRoute(null, shard.Name, territoryId);
+        if (_aetherytes.HubOfGroup(shard.Group) is not { } hub || Attuned([hub]) is null)
+            return null;
+        return new TravelRoute(hub, shard.Name, _aetherytes.TerritoryOf(hub) ?? territoryId);
+    }
+
+    /// <summary>
+    /// By the shard's PlaceName row when the sheet knows it (no spelling to disagree about: a name
+    /// that matches nothing returns true and stands still), by name otherwise or when asked to.
+    /// </summary>
+    public bool AethernetTeleport(string destination, bool byNameOnly)
+    {
+        if (!byNameOnly && _aetherytes.StopNamed(destination) is { PlaceNameId: not 0 } stop)
+        {
+            _log($"Aethernet to {stop.Name} by id {stop.PlaceNameId}.");
+            if (_lifestream.AethernetTeleportByPlaceName(stop.PlaceNameId))
+                return true;
+            _log($"Aethernet to {stop.Name} by id was refused; trying by name.");
+        }
+        _log($"Aethernet to \"{destination}\" by name.");
+        return _lifestream.AethernetTeleport(destination);
+    }
+
     public Vector3? AetherytePosition(uint aetheryteId) => _aetherytes.PositionOf(aetheryteId);
 
     public bool Teleport(uint aetheryteId) => _lifestream.Teleport(aetheryteId);

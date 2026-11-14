@@ -50,6 +50,22 @@ public sealed class FakeTravelWorld : ITravelWorld
     /// <summary>Attuned aetherytes: id → (territory, position).</summary>
     public Dictionary<uint, (uint Territory, Vector3 At)> Attuned { get; } = new();
 
+    /// <summary>City districts with no crystal: territory → (the city's crystal, the shard in the district, where the shard stands).</summary>
+    public Dictionary<uint, (uint Hub, string Shard, Vector3 At)> Districts { get; } = new();
+
+    /// <summary>Lifestream counts the character as at a shard (true after a teleport to a crystal).</summary>
+    public bool AtShard { get; set; }
+    public bool HopAccepted { get; set; } = true;
+
+    /// <summary>A hop that is accepted but goes nowhere — Lifestream matched no destination.</summary>
+    public bool HopGoesNowhere { get; set; }
+
+    /// <summary>Set: a hop is refused from further than this off the district's city crystal.</summary>
+    public float? HopNeedsWithin { get; set; }
+
+    /// <summary>A teleport lands this far from the crystal (the game puts you a few yalms off it).</summary>
+    public Vector3 TeleportLandOffset { get; set; }
+
     public Func<Vector3, float, Vector3?>? NearestReachableFn { get; set; }
     public Vector3? LastMoveTarget { get; private set; }
     public bool? LastMoveFly { get; private set; }
@@ -108,6 +124,35 @@ public sealed class FakeTravelWorld : ITravelWorld
             .Select(a => (uint?)a.Key)
             .FirstOrDefault();
 
+    public TravelRoute? RouteTo(uint territoryId, Vector3 near)
+    {
+        if (NearestAttunedAetheryte(territoryId, near) is { } direct)
+            return new TravelRoute(direct, null, territoryId);
+        if (!Districts.TryGetValue(territoryId, out var d) || !Attuned.TryGetValue(d.Hub, out var hub))
+            return null;
+        return TerritoryId == hub.Territory && AtShard
+            ? new TravelRoute(null, d.Shard, territoryId)
+            : new TravelRoute(d.Hub, d.Shard, hub.Territory);
+    }
+
+    public bool AethernetTeleport(string destination, bool byNameOnly)
+    {
+        Calls.Add($"Aethernet {destination}" + (byNameOnly ? " by name" : ""));
+        if (!HopAccepted) return false;
+        if (HopNeedsWithin is { } within
+            && !Districts.Values.Any(d => d.Shard == destination && Attuned.TryGetValue(d.Hub, out var hub)
+                                          && Vector3.Distance(PlayerPosition, hub.At) <= within))
+            return false;
+        if (HopGoesNowhere) return true;
+        foreach (var (territory, d) in Districts)
+            if (d.Shard == destination)
+            {
+                TerritoryId = territory;
+                PlayerPosition = d.At;
+            }
+        return true;
+    }
+
     public Vector3? AetherytePosition(uint aetheryteId) => Attuned.TryGetValue(aetheryteId, out var a) ? a.At : null;
 
     public void RefreshAetheryteList() => Calls.Add("RefreshAetherytes");
@@ -119,7 +164,8 @@ public sealed class FakeTravelWorld : ITravelWorld
         if (ArriveOnTeleport && Attuned.TryGetValue(aetheryteId, out var a))
         {
             TerritoryId = a.Territory;
-            PlayerPosition = a.At;
+            PlayerPosition = a.At + TeleportLandOffset;
+            AtShard = true;
         }
         return true;
     }

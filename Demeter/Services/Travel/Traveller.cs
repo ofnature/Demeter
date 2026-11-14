@@ -4,6 +4,21 @@ using System.Threading.Tasks;
 
 namespace Demeter.Services.Travel;
 
+/// <summary>Why a leg failed, which decides whether the point it was going to is to blame.</summary>
+public enum TravelFailure
+{
+    None,
+
+    /// <summary>The zone could not be reached at all (no attuned way in, a teleport or hop refused). Not the point's fault.</summary>
+    Route,
+
+    /// <summary>In the zone, the point itself could not be reached (stuck, no path, could not land). The point is to blame.</summary>
+    Point,
+
+    /// <summary>The player took over, the character died, or a plugin is missing. Nobody's point is to blame.</summary>
+    Interrupted,
+}
+
 public enum TravelStatus
 {
     /// <summary>Nothing begun, or cancelled.</summary>
@@ -22,6 +37,9 @@ public interface ITravel
 {
     TravelStatus Status { get; }
     string FailReason { get; }
+
+    /// <summary>What kind of failure it was; None unless Failed.</summary>
+    TravelFailure Failure { get; }
 
     /// <summary>
     /// Go to <paramref name="to"/> in <paramref name="territoryId"/>. <paramref name="fly"/> is
@@ -54,7 +72,14 @@ public interface ITravel
 /// </summary>
 public sealed class Traveller : ITravel
 {
-    private enum Phase { None, Settle, Teleport, TeleportWait, Mount, Move, Land }
+    private enum Phase { None, Settle, Teleport, TeleportWait, Aethernet, AethernetWait, ShardWalk, Mount, Move, Land }
+
+    /// <summary>Teleports and hops one leg may take before it is a loop, not a route.</summary>
+    private const int MaxHops = 4;
+
+    /// <summary>Lifestream starts a hop only from a shard it counts you as at: this close (Odysseus's measure).</summary>
+    private const float ShardTouch = 2.5f;
+    private static readonly TimeSpan ShardWalkMax = TimeSpan.FromSeconds(30);
 
     /// <summary>The point itself: Ariadne's own arrival, not a radius around it.</summary>
     public const float PointStop = 0.5f;
@@ -140,6 +165,16 @@ public sealed class Traveller : ITravel
     private bool _sawTravelBusy;
     private DateTime _settledSince;
 
+    /// <summary>Where the teleport in hand lands: the zone itself, or a city hub before a hop.</summary>
+    private uint _teleportTerritory;
+
+    /// <summary>The aethernet shard to hop to once the teleport lands, if any.</summary>
+    private string? _hop;
+    private bool _hopAskedByName;
+    private bool _walkedToShard;
+    private uint _hopFrom;
+    private int _hops;
+
     // Move
     private bool _issued;
     private DateTime _issuedAt;
@@ -169,6 +204,7 @@ public sealed class Traveller : ITravel
 
     public TravelStatus Status { get; private set; } = TravelStatus.Idle;
     public string FailReason { get; private set; } = string.Empty;
+    public TravelFailure Failure { get; private set; }
 
     /// <summary>What it is doing, for a status line.</summary>
     public string PhaseName => _heldForFight ? "Waiting out a fight" : _phase.ToString();
@@ -190,7 +226,12 @@ public sealed class Traveller : ITravel
         _fightDismounted = false;
         _moves = 0;
         _airTried = false;
+        _hops = 0;
+        _hop = null;
+        _walkedToShard = false;
+        _hopFrom = 0;
         FailReason = string.Empty;
+        Failure = TravelFailure.None;
         Status = TravelStatus.Running;
         Enter(Phase.Settle);
     }
@@ -213,7 +254,7 @@ public sealed class Traveller : ITravel
 
         var now = _world.UtcNow;
         if (_world.IsDead)
-            return Fail("the character is dead");
+            return Fail("the character is dead", TravelFailure.Interrupted);
 
         if (_phase is Phase.Mount or Phase.Move && HoldForFight(now))
             return Status;
@@ -223,6 +264,9 @@ public sealed class Traveller : ITravel
             case Phase.Settle: TickSettle(now); break;
             case Phase.Teleport: TickTeleport(now); break;
             case Phase.TeleportWait: TickTeleportWait(now); break;
+            case Phase.Aethernet: TickAethernet(now); break;
+            case Phase.AethernetWait: TickAethernetWait(now); break;
+            case Phase.ShardWalk: TickShardWalk(now); break;
             case Phase.Mount: TickMount(now); break;
             case Phase.Move: TickMove(now); break;
             case Phase.Land: TickLand(now); break;
@@ -257,13 +301,28 @@ public sealed class Traveller : ITravel
         var here = _world.PlayerPosition;
         if (_world.TerritoryId != _territory)
         {
-            if (_world.NearestAttunedAetheryte(_territory, _to) is not { } aetheryte)
+            if (++_hops > MaxHops)
             {
-                Fail($"territory {_territory} has no aetheryte this character has attuned — attune one, or go there yourself");
+                Fail($"still not in territory {_territory} after {MaxHops} teleports and hops", TravelFailure.Route);
                 return Phase.None;
             }
+            if (_world.RouteTo(_territory, _to) is not { } route)
+            {
+                Fail($"territory {_territory} has no aetheryte this character has attuned, and no aethernet way in — attune one, or go there yourself",
+                    TravelFailure.Route);
+                return Phase.None;
+            }
+            _hop = route.AethernetName;
+            if (route.AetheryteId is not { } aetheryte)
+            {
+                // Already in the same city: the hop is the whole way in.
+                _world.Log($"Going to territory {_territory}: the aethernet to {_hop}.");
+                return Phase.Aethernet;
+            }
             _teleportTarget = aetheryte;
-            _world.Log($"Going to territory {_territory}: teleporting to aetheryte {aetheryte}.");
+            _teleportTerritory = route.AetheryteTerritory;
+            _hopFrom = _hop is null ? 0 : aetheryte;
+            _world.Log($"Going to territory {_territory}: teleporting to aetheryte {aetheryte}" + (_hop is null ? "." : $", then the aethernet to {_hop}."));
             return Phase.Teleport;
         }
 
@@ -277,6 +336,8 @@ public sealed class Traveller : ITravel
             && Vector3.Distance(nearAt, _to) + TeleportMargin < away)
         {
             _teleportTarget = near;
+            _teleportTerritory = _territory;
+            _hop = null;
             _world.Log($"The point is {away:F0}y away and aetheryte {near} stands {Vector3.Distance(nearAt, _to):F0}y from it — teleporting there.");
             return Phase.Teleport;
         }
@@ -307,7 +368,7 @@ public sealed class Traveller : ITravel
             if (_world.IsOccupied)
                 _phaseStart = now; // a cutscene is not the teleport failing
             if (now - _phaseStart > ReadyWait)
-                Fail("never became ready to teleport");
+                Fail("never became ready to teleport", TravelFailure.Route);
             return;
         }
         // The game's aetheryte list fills a frame or two after it is asked to: a request made in
@@ -329,7 +390,7 @@ public sealed class Traveller : ITravel
         {
             _lastTeleportTry = now;
             if (now - _phaseStart > TeleportGiveUp)
-                Fail($"the teleport to aetheryte {_teleportTarget} kept being refused for {(now - _phaseStart).TotalSeconds:F0}s — Lifestream loaded?");
+                Fail($"the teleport to aetheryte {_teleportTarget} kept being refused for {(now - _phaseStart).TotalSeconds:F0}s — Lifestream loaded?", TravelFailure.Route);
             return;
         }
         _sawTravelBusy = false;
@@ -340,12 +401,12 @@ public sealed class Traveller : ITravel
     {
         if (_world.IsTravelBusy)
             _sawTravelBusy = true;
-        var arrived = _world.TerritoryId == _territory && !_world.IsTravelBusy && _world.IsReady;
+        var arrived = _world.TerritoryId == _teleportTerritory && !_world.IsTravelBusy && _world.IsReady;
 
         // Lifestream said yes and nothing happened: the cast fell into the action lock a gearset
         // change leaves behind. Ask again before believing it — the gather lists faulted every item
         // this way in Odysseus before this was there.
-        if (!_sawTravelBusy && !_world.IsTravelBusy && _world.TerritoryId != _territory
+        if (!_sawTravelBusy && !_world.IsTravelBusy && _world.TerritoryId != _teleportTerritory
             && now - _phaseStart > TeleportStartGrace && _teleportAsks < MaxTeleportAsks)
         {
             _teleportAsks++;
@@ -357,6 +418,15 @@ public sealed class Traveller : ITravel
 
         if (arrived && (_sawTravelBusy || now - _phaseStart > TravelStart))
         {
+            // At the city's crystal on the way to a district: the hop, straight away. Routing again
+            // from here asked Lifestream "at a shard?" a moment after the load, heard no, and
+            // teleported to the same crystal three times (Limsa, 2026-11-14).
+            if (_hop is not null && _teleportTerritory != _territory)
+            {
+                _world.Log($"At the city crystal — the aethernet to {_hop}.");
+                Enter(Phase.Aethernet);
+                return;
+            }
             // Wherever it put us is where the next decision starts — settle, then route again.
             _settledSince = default;
             Enter(Phase.Settle);
@@ -364,11 +434,104 @@ public sealed class Traveller : ITravel
         }
         if (!_sawTravelBusy && !arrived && now - _phaseStart > TravelStart)
         {
-            Fail($"the teleport to aetheryte {_teleportTarget} never started");
+            Fail($"the teleport to aetheryte {_teleportTarget} never started", TravelFailure.Route);
             return;
         }
         if (now - _phaseStart > TravelMax)
-            Fail($"the teleport to aetheryte {_teleportTarget} did not finish in {TravelMax.TotalSeconds:F0}s");
+            Fail($"the teleport to aetheryte {_teleportTarget} did not finish in {TravelMax.TotalSeconds:F0}s", TravelFailure.Route);
+    }
+
+    /// <summary>
+    /// The aethernet hop into a city district with no crystal of its own, through Lifestream (the
+    /// way Odysseus goes): asked once the character can act, asked again while refused, judged by
+    /// the zone it lands in.
+    /// </summary>
+    private void TickAethernet(DateTime now)
+    {
+        if (!_world.IsReady || _world.InCombat || _world.IsTravelBusy)
+        {
+            if (_world.IsOccupied)
+                _phaseStart = now;
+            if (now - _phaseStart > ReadyWait)
+                Fail("never became ready for the aethernet", TravelFailure.Route);
+            return;
+        }
+        if (now - _lastTeleportTry < TeleportRetryEvery)
+            return;
+        if (!_world.AethernetTeleport(_hop!, byNameOnly: false))
+        {
+            _lastTeleportTry = now;
+            if (WalkToShard())
+                return;
+            if (now - _phaseStart > TeleportGiveUp)
+                Fail($"the aethernet hop to {_hop} kept being refused for {(now - _phaseStart).TotalSeconds:F0}s — Lifestream loaded, and the shard attuned?", TravelFailure.Route);
+            return;
+        }
+        _sawTravelBusy = false;
+        _hopAskedByName = false;
+        Enter(Phase.AethernetWait);
+    }
+
+    private void TickAethernetWait(DateTime now)
+    {
+        if (_world.IsTravelBusy)
+            _sawTravelBusy = true;
+        var arrived = _world.TerritoryId == _territory && !_world.IsTravelBusy && _world.IsReady;
+        if (arrived && (_sawTravelBusy || now - _phaseStart > TravelStart))
+        {
+            _hop = null;
+            _settledSince = default;
+            Enter(Phase.Settle);
+            return;
+        }
+        // The by-id ask and the by-name ask take different roads inside Lifestream, and one has
+        // been seen to refuse what the other reaches: a hop that never started is asked once more
+        // by name before it counts as a failure.
+        if (!_sawTravelBusy && !arrived && now - _phaseStart > TeleportStartGrace && WalkToShard())
+            return;
+        if (!_sawTravelBusy && !arrived && !_hopAskedByName && now - _phaseStart > TeleportStartGrace)
+        {
+            _hopAskedByName = true;
+            _world.Log($"The aethernet hop to {_hop} never started — asking again by name.");
+            _world.AethernetTeleport(_hop!, byNameOnly: true);
+            _phaseStart = now;
+            return;
+        }
+        if (!_sawTravelBusy && !arrived && now - _phaseStart > TravelStart)
+        {
+            Fail($"the aethernet hop to {_hop} never started", TravelFailure.Route);
+            return;
+        }
+        if (now - _phaseStart > TravelMax)
+            Fail($"the aethernet hop to {_hop} did not finish in {TravelMax.TotalSeconds:F0}s", TravelFailure.Route);
+    }
+
+    /// <summary>
+    /// Once per leg: a hop refused, or asked for and never started, from more than a couple of
+    /// yalms off the crystal is walked up to it and asked again. False when there is nothing to walk.
+    /// </summary>
+    private bool WalkToShard()
+    {
+        if (_walkedToShard || _hopFrom == 0 || _world.AetherytePosition(_hopFrom) is not { } crystal
+            || Vector3.Distance(_world.PlayerPosition, crystal) <= ShardTouch + ArrivalSlack)
+            return false;
+        _walkedToShard = true;
+        _world.Log($"Lifestream did not start the hop from {Vector3.Distance(_world.PlayerPosition, crystal):F1}y off the crystal — walking up to it.");
+        _world.StopMoving();
+        if (!_world.MoveTo(crystal, fly: false, ShardTouch))
+            _world.Log("Ariadne refused the walk to the crystal — asking for the hop from here.");
+        Enter(Phase.ShardWalk);
+        return true;
+    }
+
+    private void TickShardWalk(DateTime now)
+    {
+        if (_world.IsMoving && now - _phaseStart < ShardWalkMax)
+            return;
+        _world.StopMoving();
+        _lastTeleportTry = default;
+        _hopAskedByName = false;
+        Enter(Phase.Aethernet);
     }
 
     private void TickMount(DateTime now)
@@ -452,14 +615,14 @@ public sealed class Traveller : ITravel
             if (!_world.NavReady)
             {
                 if (now - _phaseStart > NavWait)
-                    Fail("Ariadne has no mesh for this zone — is it loaded?");
+                    Fail("Ariadne has no mesh for this zone — is it loaded?", TravelFailure.Interrupted);
                 return;
             }
             var fly = detour is not null ? _world.IsMounted : WillFly;
             if (!_world.MoveTo(target, fly, tolerance > PointStop ? tolerance : 0f))
             {
                 if (now - _phaseStart > MoveRefusedMax)
-                    Fail($"Ariadne kept refusing the move to {Fmt(target)} — {_world.MoveResult}");
+                    Fail($"Ariadne kept refusing the move to {Fmt(target)} — {_world.MoveResult}", TravelFailure.Interrupted);
                 return;
             }
             _issued = true;
@@ -482,7 +645,7 @@ public sealed class Traveller : ITravel
             if (now - _lastProgress > MoveTotal)
             {
                 _world.StopMoving();
-                Fail($"no progress toward {Fmt(target)} for {MoveTotal.TotalSeconds:F0}s ({distance:F1}y left) — Ariadne: {_world.MoveResult}");
+                Fail($"no progress toward {Fmt(target)} for {MoveTotal.TotalSeconds:F0}s ({distance:F1}y left) — Ariadne: {_world.MoveResult}", TravelFailure.Point);
             }
             return;
         }
@@ -517,7 +680,7 @@ public sealed class Traveller : ITravel
         // The player took the keys: that is theirs to decide, not ours to fight.
         if (result.StartsWith("stopped", StringComparison.OrdinalIgnoreCase))
         {
-            Fail($"the move to {Fmt(target)} was stopped (keys pressed?)");
+            Fail($"the move to {Fmt(target)} was stopped (keys pressed?)", TravelFailure.Interrupted);
             return;
         }
 
@@ -534,7 +697,7 @@ public sealed class Traveller : ITravel
             _world.Log($"Ariadne: {result} on the ground — flying this leg.");
             return;
         }
-        Fail($"Ariadne could not reach {Fmt(target)}: {result} ({distance:F1}y left)");
+        Fail($"Ariadne could not reach {Fmt(target)}: {result} ({distance:F1}y left)", TravelFailure.Point);
     }
 
     private Phase Arrive()
@@ -603,7 +766,7 @@ public sealed class Traveller : ITravel
             _world.Dismount();
         }
         if (now - _phaseStart > ReadyWait)
-            Fail($"could not get off the mount (at {Fmt(_world.PlayerPosition)}, {(_world.IsInFlight ? "in flight" : "on the ground")})");
+            Fail($"could not get off the mount (at {Fmt(_world.PlayerPosition)}, {(_world.IsInFlight ? "in flight" : "on the ground")})", TravelFailure.Point);
     }
 
     private void Enter(Phase phase)
@@ -616,11 +779,12 @@ public sealed class Traveller : ITravel
             _issued = false;
     }
 
-    private TravelStatus Fail(string reason)
+    private TravelStatus Fail(string reason, TravelFailure failure)
     {
         _world.StopMoving();
         _phase = Phase.None;
         FailReason = reason;
+        Failure = failure;
         Status = TravelStatus.Failed;
         return Status;
     }

@@ -9,7 +9,22 @@ namespace Demeter.Config;
 [Serializable]
 public sealed class DemeterConfig : IPluginConfiguration
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
+
+    /// <summary>
+    /// Brings an older config up to date; true when it changed anything. Version 2: before it, a
+    /// leg that could not get into the zone at all (Limsa's Upper Decks has no crystal) marked
+    /// every stand point it tried as bad. Those marks are not evidence, so they all go once.
+    /// </summary>
+    public bool Migrate()
+    {
+        if (Version >= 2)
+            return false;
+        foreach (var memory in HoleMemory.Values)
+            memory.Bad.Clear();
+        Version = 2;
+        return true;
+    }
 
     /// <summary>The master switch. Off, nothing runs — not the lists, not a request from another plugin.</summary>
     public bool Enabled { get; set; } = true;

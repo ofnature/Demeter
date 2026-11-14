@@ -24,6 +24,9 @@ public sealed class FishWindow : DemeterWindow
     private readonly Func<bool> _otherBusy;
     private readonly Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> _fishHere;
     private readonly FishingRun _run;
+
+    /// <summary>The bait on the line now (0 for none), and how many of it are in the bags.</summary>
+    private readonly Func<(uint Bait, int Count)> _bait;
     private int _count = 1;
     private readonly List<(uint Id, string Name)> _names;
     private string _filter = string.Empty;
@@ -34,8 +37,9 @@ public sealed class FishWindow : DemeterWindow
 
     public FishWindow(FishCatalog catalog, FishSpots spots, FishingHoles holes, HoleApproach approach,
         Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> fishHere,
-        FishingRun run, Func<bool> otherBusy) : base("Demeter Fish###DemeterFish")
+        FishingRun run, Func<bool> otherBusy, Func<(uint Bait, int Count)> bait) : base("Demeter Fish###DemeterFish")
     {
+        _bait = bait;
         _fishHere = fishHere;
         _run = run;
         _catalog = catalog;
@@ -55,10 +59,18 @@ public sealed class FishWindow : DemeterWindow
         var now = DateTime.UtcNow;
         var et = EorzeaClock.MinuteOfDay(now);
         ImGui.TextColored(DemeterTheme.TextSecondary, $"Eorzea {(int)et / 60:00}:{(int)et % 60:00}");
-        ImGui.SameLine();
-        ImGui.TextColored(DemeterTheme.TextDisabled, _catalog.Source is { } s
-            ? $"· {_catalog.Count} fish · GatherBuddy Reborn {s.Commit[..Math.Min(7, s.Commit.Length)]}"
-            : "· no fish data");
+        // Where the fish data came from is for the curious (and NOTICE.md); missing data is for everyone.
+        if (_catalog.Source is { } s)
+        {
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"{_catalog.Count} fish · data from GatherBuddy Reborn {s.Commit[..Math.Min(7, s.Commit.Length)]}");
+        }
+        else
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(DemeterTheme.StatusRed, "· no fish data");
+        }
+        DrawBait();
 
         DrawApproach();
 
@@ -180,6 +192,26 @@ public sealed class FishWindow : DemeterWindow
             else
                 ImGui.TextColored(DemeterTheme.StatusYellow, $"in {Span(current.Start - now)} ({current.Start.ToLocalTime():ddd HH:mm}, for {Span(current.Length)})");
         }
+    }
+
+    /// <summary>
+    /// The bait on the line, and how many are left. Green when it is what the selected fish's road
+    /// starts with, yellow when it is not (Fish puts the right one on), red when nothing is on.
+    /// </summary>
+    private void DrawBait()
+    {
+        var (bait, count) = _bait();
+        ImGui.SameLine();
+        if (bait == 0)
+        {
+            ImGui.TextColored(DemeterTheme.StatusRed, "· no bait on");
+            return;
+        }
+        var wants = _catalog.ById(_selected)?.Path is { Count: > 0 } road ? road[0] : 0u;
+        var colour = wants == 0 || wants == bait ? DemeterTheme.StatusGreen : DemeterTheme.StatusYellow;
+        ImGui.TextColored(colour, $"· Bait: {_spots.ItemName(bait)} ×{count}");
+        if (ImGui.IsItemHovered() && wants != 0 && wants != bait)
+            ImGui.SetTooltip($"{_spots.ItemName(_selected)} starts with {_spots.ItemName(wants)} — Fish puts it on for you.");
     }
 
     /// <summary>What "Fish" or "Go there" is doing, with a Stop.</summary>

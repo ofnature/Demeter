@@ -5,6 +5,13 @@ using System.Threading.Tasks;
 namespace Demeter.Services.Travel;
 
 /// <summary>
+/// A way into a territory: teleport to <see cref="AetheryteId"/> (in that territory, or a city's
+/// crystal in <see cref="AetheryteTerritory"/>) when set, then hop the aethernet to
+/// <see cref="AethernetName"/> when set.
+/// </summary>
+public sealed record TravelRoute(uint? AetheryteId, string? AethernetName, uint AetheryteTerritory);
+
+/// <summary>
 /// What <see cref="Traveller"/> needs of the game and of the plugins that move the character —
 /// Lifestream for the teleport into the zone, Ariadne for everything inside it. Decision-free:
 /// "do the thing" or "report the fact", so every judgement stays in <see cref="Traveller"/>, where a
@@ -71,6 +78,22 @@ public interface ITravelWorld
 
     /// <summary>The attuned aetheryte in that territory closest to a point, or null when none is attuned.</summary>
     uint? NearestAttunedAetheryte(uint territoryId, Vector3 near);
+
+    /// <summary>
+    /// How to get into a territory: an attuned aetheryte in it; else, for a city district with no
+    /// crystal of its own (Limsa's Upper Decks, the halves of Gridania, Ul'dah's steps), the city's
+    /// crystal and then the aethernet shard in the district nearest the point; or just the hop when
+    /// already standing at a shard of the same city. Null when there is no way in.
+    /// </summary>
+    TravelRoute? RouteTo(uint territoryId, Vector3 near);
+
+    /// <summary>
+    /// Lifestream's aethernet hop to a shard. False when refused. <paramref name="byNameOnly"/> skips
+    /// the by-id ask: the two take different paths inside Lifestream, and one has been seen to refuse
+    /// what the other reaches (Odysseus).
+    /// </summary>
+    bool AethernetTeleport(string destination, bool byNameOnly);
+
     Vector3? AetherytePosition(uint aetheryteId);
 
     /// <summary>The game's aetheryte list fills a frame or two after it is asked to.</summary>

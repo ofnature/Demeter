@@ -54,6 +54,119 @@ public class TravellerTests
     }
 
     [Fact]
+    public void A_zone_with_nothing_attuned_is_a_route_failure_not_the_points()
+    {
+        var world = new FakeTravelWorld { TerritoryId = 129 };
+        var travel = new Traveller(world);
+
+        travel.Begin(1187, Node, fly: true, land: true);
+        Run(travel, world);
+        Assert.Equal(TravelFailure.Route, travel.Failure);
+    }
+
+    // Limsa's Upper Decks (128) has no crystal: the Lower Decks crystal (8, in 129), then the
+    // aethernet to the Upper Decks shard, then the walk.
+    private static readonly Vector3 UpperDecksSpot = new(-20, 40, 160);
+
+    private static FakeTravelWorld Limsa(uint startIn = 1187)
+    {
+        var world = new FakeTravelWorld { TerritoryId = startIn, ArriveOnMove = true, CanMountHere = false };
+        world.Attuned[8] = (129, new Vector3(-84, 20, 0));
+        world.Districts[128] = (8, "The Aftcastle", new Vector3(16, 40, 70));
+        return world;
+    }
+
+    [Fact]
+    public void A_district_with_no_crystal_is_the_city_crystal_then_the_aethernet_then_the_walk()
+    {
+        var world = Limsa();
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        Assert.Equal(TravelStatus.Done, Run(travel, world));
+
+        var teleport = world.Calls.IndexOf("Teleport 8");
+        var hop = world.Calls.IndexOf("Aethernet The Aftcastle");
+        var move = world.Calls.FindIndex(c => c.StartsWith("Move", StringComparison.Ordinal));
+        Assert.True(teleport >= 0 && teleport < hop && hop < move, string.Join(" | ", world.Calls));
+        Assert.Equal(UpperDecksSpot, world.LastMoveTarget);
+        Assert.Equal(128u, world.TerritoryId);
+    }
+
+    [Fact]
+    public void After_the_city_crystal_it_hops_rather_than_teleporting_there_again()
+    {
+        // Limsa, 2026-11-14: routing again after the landing heard "not at a shard" and teleported
+        // to the same crystal three times.
+        var world = Limsa();
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        for (var i = 0; i < 20 && world.TerritoryId != 129; i++) { travel.Tick(); world.Advance(0.5); }
+        world.AtShard = false;   // Lifestream has not caught up with the landing yet
+        Assert.Equal(TravelStatus.Done, Run(travel, world));
+        Assert.Equal(1, world.Calls.Count(c => c == "Teleport 8"));
+        Assert.Contains("Aethernet The Aftcastle", world.Calls);
+    }
+
+    [Fact]
+    public void A_hop_refused_off_the_crystal_walks_up_to_it_and_asks_again()
+    {
+        var world = Limsa();
+        world.TeleportLandOffset = new Vector3(8, 0, 0);
+        world.HopNeedsWithin = 3f;
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        Assert.Equal(TravelStatus.Done, Run(travel, world));
+        var walk = world.Calls.IndexOf("Move -84,20,0 fly=False");
+        Assert.True(walk >= 0, string.Join(" | ", world.Calls));
+        Assert.True(walk < world.Calls.LastIndexOf("Aethernet The Aftcastle"));
+        Assert.Equal(128u, world.TerritoryId);
+        Assert.Contains(world.Logged, m => m.Contains("walking up to it"));
+    }
+
+    [Fact]
+    public void Already_at_a_shard_in_the_same_city_it_only_hops()
+    {
+        var world = Limsa(startIn: 129);
+        world.AtShard = true;
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        Assert.Equal(TravelStatus.Done, Run(travel, world));
+        Assert.DoesNotContain(world.Calls, c => c.StartsWith("Teleport", StringComparison.Ordinal));
+        Assert.Contains("Aethernet The Aftcastle", world.Calls);
+    }
+
+    [Fact]
+    public void A_hop_that_goes_nowhere_is_asked_again_by_name_then_fails_as_a_route_failure()
+    {
+        var world = Limsa();
+        world.HopGoesNowhere = true;
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        Assert.Equal(TravelStatus.Failed, Run(travel, world));
+        Assert.Contains("Aethernet The Aftcastle by name", world.Calls);
+        Assert.Equal(TravelFailure.Route, travel.Failure);
+        Assert.Contains("never started", travel.FailReason);
+    }
+
+    [Fact]
+    public void A_refused_hop_is_a_route_failure()
+    {
+        var world = Limsa();
+        world.HopAccepted = false;
+        var travel = new Traveller(world);
+
+        travel.Begin(128, UpperDecksSpot, fly: true, land: true);
+        Assert.Equal(TravelStatus.Failed, Run(travel, world));
+        Assert.Equal(TravelFailure.Route, travel.Failure);
+        Assert.Contains("refused", travel.FailReason);
+    }
+
+    [Fact]
     public void The_aetheryte_list_is_warmed_before_the_teleport_is_asked()
     {
         var world = new FakeTravelWorld { TerritoryId = 129, ArriveOnMove = true };
@@ -176,6 +289,7 @@ public class TravellerTests
         world.FinishMove("no path (startOffSurface)");
         Assert.Equal(TravelStatus.Failed, Run(travel, world, ticks: 6));
         Assert.Contains("no path (startOffSurface)", travel.FailReason);
+        Assert.Equal(TravelFailure.Point, travel.Failure);   // the point's fault, not the route's
     }
 
     [Fact]

@@ -100,6 +100,9 @@ public sealed class FishingRun
     private uint _mooching;
     private DateTime _lineIn;
     private bool _lineInSeen;
+
+    /// <summary>The line in the water is the stand point's test cast, not one of ours: checked before it counts.</summary>
+    private bool _inheritedCast;
     private bool _judged;
     private DateTime _lastAction;
     private DateTime _lastChange;
@@ -174,7 +177,11 @@ public sealed class FishingRun
             Fault($"{Name(target.Id)} is caught by mooching, and Mooch is not learned yet (Fisher Lv 25)");
             return;
         }
-        _approach.KeepFishing = false;
+        // The test cast that proves the stand point stays in the water and becomes the first cast,
+        // when it has the right bait on (checked once it is in). Reeling it in and casting again was
+        // a whole cast, the rod put away and taken out, for nothing.
+        _approach.KeepFishing = true;
+        _inheritedCast = false;
         _approach.Begin(hole, recorded, memory);
         State = _approach.State == HoleApproachState.Faulted ? FishingRunState.Faulted : FishingRunState.Approaching;
         FailReason = _approach.FailReason;
@@ -234,6 +241,7 @@ public sealed class FishingRun
                         break;
                     case HoleApproachState.Ready:
                         State = FishingRunState.Fishing;
+                        _inheritedCast = _world.State != FishState.None;
                         _lastChange = now;
                         _lastWindowCheck = default;
                         _world.Log($"Fishing {Name(_target!.Id)} ×{_wanted} at {_hole!.Name}.");
@@ -312,6 +320,19 @@ public sealed class FishingRun
         switch (state)
         {
             case FishState.LineInWater:
+                if (_inheritedCast)
+                {
+                    _inheritedCast = false;
+                    var wantCollect = _collectability > 0;
+                    if (_world.CurrentBait != path[0] || _world.HasStatus(CollectStatus) != wantCollect)
+                    {
+                        _world.Log($"The test cast went in with {Name(_world.CurrentBait)}{(_world.HasStatus(CollectStatus) != wantCollect ? $", Collect {(wantCollect ? "off" : "on")}" : string.Empty)} — reeling in to cast with {Name(path[0])}.");
+                        _lastAction = now;
+                        _world.UseAction(Quit);
+                        break;
+                    }
+                    _world.Log($"The test cast has {Name(path[0])} on — fishing it.");
+                }
                 if (!_lineInSeen)
                 {
                     _lineInSeen = true;
@@ -327,7 +348,8 @@ public sealed class FishingRun
                 _judged = true;
                 var bait = _mooching != 0 ? _mooching : _world.CurrentBait;
                 var call = BiteJudge.Judge(bait, (now - _lineIn).TotalSeconds, _world.Tug, _world.HasStatus(ChumStatus),
-                    Wanted(target, immediate), _holes.ById(_hole!.Id)?.Bites ?? [], id => BiteJudge.TugOf(_fish.ById(id)?.Bite));
+                    Wanted(target, immediate), _holes.ById(_hole!.Id)?.Bites ?? [], id => BiteJudge.TugOf(_fish.ById(id)?.Bite),
+                    id => _fish.ById(id)?.Path is { Count: > 0 } road ? road[^1] : null);
                 _world.Log($"Bite: {call.Why}.");
                 if (call.Hook)
                 {

@@ -190,8 +190,13 @@ public sealed class HoleApproach
                 _world.Face(_stands[_index].Rotation);
                 Enter(HoleApproachState.Facing);
                 break;
-            case TravelStatus.Failed:
+            case TravelStatus.Failed when _travel.Failure == TravelFailure.Point:
                 NextStand($"could not be reached ({_travel.FailReason})");
+                break;
+            case TravelStatus.Failed:
+                // No way into the zone, a refused teleport, the keys taken: nothing to do with this
+                // stand point, so nothing is held against it — and the next point would fail the same.
+                Fault($"{_hole!.Name}: could not get there — {_travel.FailReason}");
                 break;
         }
     }

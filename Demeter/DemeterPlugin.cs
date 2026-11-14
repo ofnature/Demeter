@@ -76,6 +76,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
                     Say($"Brought {_config.GatherLists.Count} gather list(s) over from Odysseus.");
                 PluginInterface.SavePluginConfig(_config);
             }
+            if (_config.Migrate())
+                PluginInterface.SavePluginConfig(_config);
             DemeterTheme.SetMode(_config.Theme);
 
             var aetherytes = new AetheryteCatalog(DataManager, message => Warn(message));
@@ -146,7 +148,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 message => Say(message));
 
             _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
-                () => _lists.State == GatherListRunState.Running || _items.IsRunning);
+                () => _lists.State == GatherListRunState.Running || _items.IsRunning,
+                () => _fisherWorld.CurrentBait is var bait and not 0 ? (bait, _fisherWorld.ItemCount(bait)) : (0u, 0));
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);

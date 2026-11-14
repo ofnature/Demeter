@@ -57,6 +57,27 @@ public class FishingRunTests
     public void Outside_every_range_but_the_wrong_tug_for_the_target_is_let_go()
         => Assert.False(BiteJudge.Judge(Bait, 40, Tug.Light, false, new HashSet<uint> { Target }, Bites, TugOf).Hook);
 
+    [Fact]
+    public void A_wanted_fish_never_recorded_on_this_bait_here_gets_every_bite_with_its_tug()
+    {
+        // A fish that bites this bait with a light tug but was never recorded at this hole: a light
+        // bite that fits only another fish's range may still be it.
+        const uint kelp = 9001;
+        Tug Tugs(uint id) => id == kelp ? Tug.Light : TugOf(id);
+        uint? BitesOn(uint id) => id == kelp ? Bait : null;
+        var wanted = new HashSet<uint> { kelp };
+
+        var light = BiteJudge.Judge(Bait, 6, Tug.Light, false, wanted, Bites, Tugs, BitesOn);
+        Assert.True(light.Hook);
+        Assert.Contains("never recorded", light.Why);
+
+        // Not its tug: still let go.
+        Assert.False(BiteJudge.Judge(Bait, 6, Tug.Heavy, false, wanted, Bites, Tugs, BitesOn).Hook);
+
+        // A fish that bites only a mooched fish says nothing about bites on the bait.
+        Assert.False(BiteJudge.Judge(Bait, 6, Tug.Light, false, wanted, Bites, Tugs, _ => 9999u).Hook);
+    }
+
     // ── the run, against a scripted hole ──
 
     /// <summary>
@@ -204,7 +225,8 @@ public class FishingRunTests
         public bool EquipGearsetFor(uint classJobId, out string reason) { reason = string.Empty; return true; }
         public void Face(float rotation) { }
         public uint CastStatus => 0;
-        bool IHoleWorld.Cast() { State = FishState.LineInWater; return true; }
+        bool IHoleWorld.Cast() { TestCasts++; Line(CurrentBait); return true; }
+        public int TestCasts { get; private set; }
         bool IHoleWorld.Quit() { State = FishState.None; return true; }
         public bool IsFishing => State != FishState.None;
     }
@@ -213,6 +235,7 @@ public class FishingRunTests
     {
         public TravelStatus Status { get; private set; }
         public string FailReason => string.Empty;
+        public TravelFailure Failure => TravelFailure.None;
         public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop) => Status = TravelStatus.Running;
         public TravelStatus Tick() => Status = TravelStatus.Done;
         public void Cancel() => Status = TravelStatus.Idle;
@@ -419,6 +442,41 @@ public class FishingRunTests
     }
 
     [Fact]
+    public void The_test_cast_with_the_right_bait_on_is_fished_not_reeled_in()
+    {
+        // Limsa, 2026-11-14: the test cast came in, the rod went away and came out again, for nothing.
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, pond) = Make([target]);
+        pond.CurrentBait = Bait;
+        pond.Script[Bait] = new([(Target, 17)]);
+        pond.Tugs[Target] = Tug.Heavy;
+
+        run.Begin(target, 1, Hole, [new StandPoint { X = 1 }], new HoleMemory());
+        Assert.Equal(FishingRunState.Done, Run(run, pond));
+        Assert.Equal(1, pond.TestCasts);
+        Assert.DoesNotContain(FishingRun.Cast, pond.Actions);   // the test cast was the cast
+        Assert.Equal(1, pond.Bag[Target]);
+        Assert.Contains(pond.Logged, m => m.Contains("fishing it"));
+    }
+
+    [Fact]
+    public void The_test_cast_with_the_wrong_bait_on_is_reeled_in_and_the_bait_changed()
+    {
+        var target = Fish(Target, "Legendary", Bait);
+        var (run, pond) = Make([target]);
+        pond.CurrentBait = 0;
+        pond.Script[Bait] = new([(Target, 17)]);
+        pond.Tugs[Target] = Tug.Heavy;
+
+        run.Begin(target, 1, Hole, [new StandPoint { X = 1 }], new HoleMemory());
+        Assert.Equal(FishingRunState.Done, Run(run, pond));
+        Assert.True(pond.Actions.IndexOf(FishingRun.Quit) < pond.Actions.IndexOf(FishingRun.Cast));
+        Assert.Equal(Bait, pond.CurrentBait);
+        Assert.Equal(1, pond.Bag[Target]);
+        Assert.Contains(pond.Logged, m => m.Contains("reeling in to cast with"));
+    }
+
+    [Fact]
     public void Asked_to_stop_after_the_cast_it_lands_what_bites_and_casts_no_more()
     {
         var target = Fish(Target, "Legendary", Bait);
@@ -427,7 +485,8 @@ public class FishingRunTests
         pond.Tugs[Target] = Tug.Heavy;
 
         run.Begin(target, 2, Hole, [new StandPoint { X = 1 }], new HoleMemory());
-        for (var i = 0; i < 200 && !(run.State == FishingRunState.Fishing && pond.State == FishState.LineInWater); i++)
+        for (var i = 0; i < 200 && !(run.State == FishingRunState.Fishing && pond.State == FishState.LineInWater
+                                      && pond.Actions.Contains(FishingRun.Cast)); i++)
         {
             run.Tick();
             pond.Advance(0.5);

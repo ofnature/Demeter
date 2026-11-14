@@ -58,8 +58,12 @@ public class HoleApproachTests
     private sealed class Travel(World world) : ITravel
     {
         public HashSet<float> Unreachable { get; } = [];
+
+        /// <summary>Set: every leg fails this way, before any point is reached (no way into the zone).</summary>
+        public TravelFailure? FailEveryLeg { get; set; }
         public TravelStatus Status { get; private set; }
         public string FailReason { get; private set; } = string.Empty;
+        public TravelFailure Failure { get; private set; }
         public List<Vector3> Legs { get; } = [];
         private Vector3 _to;
 
@@ -73,9 +77,16 @@ public class HoleApproachTests
         public TravelStatus Tick()
         {
             if (Status != TravelStatus.Running) return Status;
+            if (FailEveryLeg is { } kind)
+            {
+                FailReason = "territory 128 has no aetheryte this character has attuned";
+                Failure = kind;
+                return Status = TravelStatus.Failed;
+            }
             if (Unreachable.Contains(_to.X))
             {
                 FailReason = "stuck (12y short)";
+                Failure = TravelFailure.Point;
                 return Status = TravelStatus.Failed;
             }
             world.Position = _to;
@@ -147,6 +158,23 @@ public class HoleApproachTests
         Assert.Equal(HoleApproachState.Ready, Run(approach, world));
         Assert.Contains(world.Logged, m => m.Contains("could not be reached"));
         Assert.Equal(10f, Assert.Single(memory.Bad).X);
+    }
+
+    [Fact]
+    public void No_way_into_the_zone_stops_at_once_and_holds_nothing_against_the_points()
+    {
+        // Limsa's Upper Decks, 2026-11-14: no crystal of its own, so every point "failed" and all
+        // four were remembered as bad. A route failure is not the point's.
+        var (approach, world, travel, saves) = Make();
+        world.Wet.Add(10);
+        travel.FailEveryLeg = TravelFailure.Route;
+        var memory = new HoleMemory();
+        approach.Begin(Hole, [At(10), At(20), At(30)], memory);
+
+        Assert.Equal(HoleApproachState.Faulted, Run(approach, world));
+        Assert.Single(travel.Legs);
+        Assert.Empty(memory.Bad);
+        Assert.Contains("could not get there", approach.FailReason);
     }
 
     [Fact]

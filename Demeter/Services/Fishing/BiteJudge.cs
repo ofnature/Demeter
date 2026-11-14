@@ -44,8 +44,9 @@ public static class BiteJudge
     /// <param name="wanted">The target, the fish its mooch road still needs, the predators still owed.</param>
     /// <param name="holeBites">This hole's recorded bite ranges.</param>
     /// <param name="tugOfFish">The tug a fish bites with (from the fish data); Unknown when not known.</param>
+    /// <param name="biteBaitOf">What a fish bites on: the last step of its road (a bait, or the fish mooched).</param>
     public static BiteCall Judge(uint bait, double seconds, Tug tug, bool chum, IReadOnlySet<uint> wanted,
-        IReadOnlyList<BiteTimes> holeBites, Func<uint, Tug> tugOfFish)
+        IReadOnlyList<BiteTimes> holeBites, Func<uint, Tug> tugOfFish, Func<uint, uint?>? biteBaitOf = null)
     {
         var onBait = holeBites.Where(b => b.Bait == bait).ToList();
         var candidates = onBait
@@ -59,12 +60,23 @@ public static class BiteJudge
         if (wantedHere.Count > 0)
             return new BiteCall(true, $"{seconds:F1}s{TugText(tug)} fits fish {string.Join(", ", wantedHere)}", candidates);
 
+        // A wanted fish that takes this bait but was never recorded taking it here could bite at any
+        // second, so "fits only another fish" is no evidence against it. Hook what has its tug.
+        var unrecorded = wanted
+            .Where(f => biteBaitOf?.Invoke(f) == bait && !onBait.Any(b => b.Fish == f))
+            .Where(f => tug == Tug.Unknown || tugOfFish(f) is var t && (t == Tug.Unknown || t == tug))
+            .ToList();
+        if (unrecorded.Count > 0)
+            return new BiteCall(true, $"{seconds:F1}s{TugText(tug)} — could be fish {string.Join(", ", unrecorded)}, never recorded on this bait here; hooking to see", candidates);
+
         if (candidates.Count > 0)
             return new BiteCall(false, $"{seconds:F1}s{TugText(tug)} fits only fish {string.Join(", ", candidates)} — letting it go", candidates);
 
         // Nothing recorded fits. If a wanted fish has records on this bait and its tug is known and
         // different, it is not that one; otherwise hook — unknown is not unwanted.
-        var wantedOnBait = onBait.Where(b => wanted.Contains(b.Fish)).Select(b => b.Fish).Distinct().ToList();
+        var wantedOnBait = onBait.Where(b => wanted.Contains(b.Fish)).Select(b => b.Fish)
+            .Concat(wanted.Where(f => biteBaitOf?.Invoke(f) == bait))
+            .Distinct().ToList();
         if (tug != Tug.Unknown && wantedOnBait.Count > 0
             && wantedOnBait.All(f => tugOfFish(f) is var t && t != Tug.Unknown && t != tug))
             return new BiteCall(false, $"{seconds:F1}s{TugText(tug)} — not the tug the wanted fish bites with; letting it go", candidates);
