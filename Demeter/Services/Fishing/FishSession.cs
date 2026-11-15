@@ -60,6 +60,17 @@ public sealed record FishBite(double Seconds, Tug Tug, bool Hooked);
 /// </para>
 ///
 /// <para>
+/// On a Cosmic mission the GP spent comes back when it is complete ("You recovered all 950 GP
+/// consumed during the stellar mission", seen 2026-11-14), so it is spent as Korha spent it by hand
+/// for a Gold Star: once a mission's prize is known, Prize Catch before every cast (a large-sized
+/// fish scores more — 7.7 ilms 228 points where 4.3 scored 100), Big-game Fishing on top when two
+/// Angler's Art stacks are up — but never the 350 GP an Identical Cast after a prize would need. A
+/// mission whose first cast does not go in gets Collect turned on and one more cast; when that
+/// one goes in, the mission is remembered as needing Collect and it goes on before the first cast.
+/// Each special action is pressed at most once a cast, so one the game refuses holds nothing up.
+/// </para>
+///
+/// <para>
 /// A mission that scores only its <b>largest</b> fish (<see cref="FishScores.IsLargestScored"/>) is
 /// fished for length instead: a bite whose tug only fish never landed longer than the score already
 /// stands is let go, and after landing the mission's biggest fish comes Identical Cast and then Prize
@@ -84,6 +95,8 @@ public sealed class FishSession
     public const uint ThaliaksFavor = 26804, AnglersArt = 2778, PrizeCatch = 26806, PrizeStatus = 2780;
     public const int IdenticalCost = 350, DoubleHookCost = 400, TripleHookCost = 700, ThaliaksRestore = 150, ThaliaksStacks = 3;
     public const int PrizeCatchCost = 200;
+    public const uint BigGameFishing = 37046, BigGameStatus = 3907;
+    public const int BigGameStacks = 2;
 
     /// <summary>A pressed cast that has not gone in by then never will: no water, or nothing to cast with.</summary>
     public static readonly TimeSpan CastTake = TimeSpan.FromSeconds(5);
@@ -136,6 +149,12 @@ public sealed class FishSession
     private DateTime _lastLandedAt;
     private bool _lastLandedScored;
     private bool _missionComplete;
+
+    /// <summary>The special actions pressed since the last cast: each at most once a cast.</summary>
+    private readonly HashSet<uint> _triedThisCast = [];
+
+    /// <summary>The first cast was refused and Collect has been turned on for one more.</summary>
+    private bool _collectRetried;
     private double _lastLandedIlms;
 
     /// <summary>The longest fish landed this session, in ilms.</summary>
@@ -233,6 +252,8 @@ public sealed class FishSession
         _lastLanded = 0;
         _lastLandedScored = true;
         _missionComplete = false;
+        _triedThisCast.Clear();
+        _collectRetried = false;
         _bestIlms = 0;
         _lastLandedIlms = 0;
         _gameSaid = string.Empty;
@@ -410,6 +431,11 @@ public sealed class FishSession
             if (!ready && _castPressedAt is not null)
             {
                 _castPressedAt = null;
+                if (Casts == 0 && _collectRetried && Mission is var needing and not 0)
+                {
+                    _scores.MarkNeedsCollect(needing);
+                    _world.Log($"The cast went in with Collect on: mission {needing} needs it, and gets it from the start next time.");
+                }
                 Casts++;
                 _castsSincePause++;
             }
@@ -477,6 +503,21 @@ public sealed class FishSession
                     if (now - pressed > CastTake)
                     {
                         var said = _gameSaid.Length > 0 ? $" (the game: \"{_gameSaid}\")" : string.Empty;
+                        // A mission may want Collect on before a cast goes in at all.
+                        if (Casts == 0 && !_collectRetried && Mission != 0 && !_world.HasStatus(FishingRun.CollectStatus))
+                        {
+                            if (!_knows(FishingRun.Collect))
+                            {
+                                Fault(FishSessionCode.CannotFishHere, "the first cast did not go in — the mission may need Collect, which is not learned "
+                                                                      + $"(Fisher Lv 50, quest \"Inscrutable Tastes\"){said}");
+                                break;
+                            }
+                            _collectRetried = true;
+                            _castPressedAt = null;
+                            _gameSaid = string.Empty;
+                            Press(now, FishingRun.Collect, $"The first cast did not go in{said} — the mission may need Collect: turning it on.");
+                            break;
+                        }
                         if (Casts == 0)
                             Fault(FishSessionCode.CannotFishHere, "the first cast did not go in — no water here, not facing it, "
                                                                   + $"or the mission needs an action not learned (a collectability mission needs Collect){said}");
@@ -490,6 +531,7 @@ public sealed class FishSession
                 if (Special(now))
                     break;
                 _castIdentical = _world.HasStatus(IdenticalStatus);
+                _triedThisCast.Clear();
                 _castPressedAt = now;
                 _gapUntil = now + _pace.ActionGap();
                 _lastChange = now;
@@ -518,22 +560,31 @@ public sealed class FishSession
         return true;
     }
 
-    /// <summary>Before a cast: Thaliak's Favor when it fits, Identical Cast after a prize. True when one was pressed.</summary>
+    /// <summary>
+    /// Before a cast, in this order: Collect for a mission that needs it, Thaliak's Favor when it fits,
+    /// Identical Cast after a prize, Prize Catch, Big-game Fishing on a Prize Catch. True when one was pressed.
+    /// </summary>
     private bool Special(DateTime now)
     {
         var gp = _world.Gp;
-        if (_knows(ThaliaksFavor) && _world.StatusStacks(AnglersArt) >= ThaliaksStacks && gp + ThaliaksRestore <= _world.MaxGp)
+        var mission = Mission;
+        if (Casts == 0 && mission != 0 && _scores.NeedsCollect(mission) && !_world.HasStatus(FishingRun.CollectStatus) && Can(FishingRun.Collect))
+        {
+            Press(now, FishingRun.Collect, $"Collect on: mission {mission} needs it.");
+            return true;
+        }
+
+        if (Can(ThaliaksFavor) && _world.StatusStacks(AnglersArt) >= ThaliaksStacks && gp + ThaliaksRestore <= _world.MaxGp)
         {
             Press(now, ThaliaksFavor, $"Thaliak's Favor: {gp} GP + {ThaliaksRestore}.");
             return true;
         }
 
         // The same fish again, after a prize: not twice running (the game refuses consecutive casts).
-        var mission = Mission;
         var largest = _scores.IsLargestScored(mission);
         var prize = largest ? _scores.IsBiggest(mission, _lastLanded) : _scores.IsPrize(mission, _lastLanded);
         if (_lastLanded != 0 && !_castIdentical && !_world.HasStatus(IdenticalStatus) && gp >= IdenticalCost
-            && _knows(IdenticalCast) && (_wanted.Count == 0 || _wanted.Contains(_lastLanded)) && prize)
+            && Can(IdenticalCast) && (_wanted.Count == 0 || _wanted.Contains(_lastLanded)) && prize)
         {
             var worth = largest
                 ? $"up to {_scores.SizeOf(mission, _lastLanded)!.Max:F1} ilms"
@@ -542,17 +593,32 @@ public sealed class FishSession
             return true;
         }
 
-        // Scored by length: the same big fish, large-sized.
-        if (largest && _world.HasStatus(IdenticalStatus) && !_world.HasStatus(PrizeStatus) && gp >= PrizeCatchCost && _knows(PrizeCatch))
+        // On a mission the GP comes back: a large-sized fish every cast, once the prize is known — but
+        // never out of the GP an Identical Cast would need, unless one is already up.
+        var identicalUp = _world.HasStatus(IdenticalStatus);
+        if (mission != 0 && (largest || _scores.HasPrize(mission)) && !_world.HasStatus(PrizeStatus) && Can(PrizeCatch)
+            && (identicalUp ? gp >= PrizeCatchCost : gp - PrizeCatchCost >= IdenticalCost))
         {
             Press(now, PrizeCatch, $"Prize Catch: a large-sized one ({gp} GP).");
+            return true;
+        }
+
+        // A large one, and with luck an especially large one.
+        if (mission != 0 && _world.HasStatus(PrizeStatus) && !_world.HasStatus(BigGameStatus)
+            && _world.StatusStacks(AnglersArt) >= BigGameStacks && Can(BigGameFishing))
+        {
+            Press(now, BigGameFishing, $"Big-game Fishing ({_world.StatusStacks(AnglersArt)} Angler's Art).");
             return true;
         }
         return false;
     }
 
+    /// <summary>Learned, and not yet pressed since the last cast.</summary>
+    private bool Can(uint action) => _knows(action) && !_triedThisCast.Contains(action);
+
     private void Press(DateTime now, uint action, string why)
     {
+        _triedThisCast.Add(action);
         _gapUntil = now + _pace.ActionGap();
         _lastChange = now;
         _world.Log(why);

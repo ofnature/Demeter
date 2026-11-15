@@ -11,12 +11,12 @@ public class FishSessionTests
     private const uint Mission = 1675;
 
     private static (FishSession Session, Pond Pond) Make(bool fisher = true, IEnumerable<FishInfo>? fish = null,
-        FishScores? scores = null, Func<uint, bool>? knows = null, Func<uint>? missionScore = null)
+        FishScores? scores = null, Func<uint, bool>? knows = null, Func<uint>? missionScore = null, uint mission = Mission)
     {
         var pond = new Pond { CurrentBait = Bait };
         pond.Bag[Bait] = 999;
         var session = new FishSession(pond, () => fisher, new FishCatalog(fish ?? []), id => $"item {id}",
-            knows ?? (_ => true), scores ?? new FishScores(), () => Mission, missionScore ?? (() => 0));
+            knows ?? (_ => true), scores ?? new FishScores(), () => mission, missionScore ?? (() => 0));
         return (session, pond);
     }
 
@@ -108,12 +108,109 @@ public class FishSessionTests
     [Fact]
     public void A_first_cast_that_does_not_go_in_is_no_water_here()
     {
-        var (session, pond) = Make();
+        var (session, pond) = Make(mission: 0);
         pond.NoWater = true;
         session.Begin(Ask());
         Assert.Equal(FishSessionState.Faulted, Run(session, pond));
         Assert.Equal(FishSessionCode.CannotFishHere, session.Code);
         Assert.Equal(1, pond.Actions.Count(a => a == FishingRun.Cast));   // tried once, not pressed over and over
+    }
+
+    [Fact]
+    public void On_a_mission_a_refused_first_cast_tries_Collect_once_before_giving_up()
+    {
+        var (session, pond) = Make();
+        pond.NoWater = true;
+        session.Begin(Ask());
+        Assert.Equal(FishSessionState.Faulted, Run(session, pond));
+        Assert.Equal(FishSessionCode.CannotFishHere, session.Code);
+        Assert.Equal(2, pond.Actions.Count(a => a == FishingRun.Cast));
+        Assert.Single(pond.Actions, a => a == FishingRun.Collect);
+    }
+
+    [Fact]
+    public void A_mission_that_needs_Collect_gets_it_and_is_remembered()
+    {
+        var scores = new FishScores();
+        var (session, pond) = Make(scores: scores);
+        pond.CastNeedsCollect = true;
+        Script(pond, (Small, 5), (Small, 5));
+        session.Begin(Ask(castBudget: 1));
+        Assert.Equal(FishSessionState.Done, Run(session, pond));
+        Assert.Equal(FishSessionCode.CastBudget, session.Code);
+        Assert.True(scores.NeedsCollect(Mission));
+        Assert.Single(pond.Answers);   // the collectable prompt was answered, and kept
+
+        // Next time Collect goes on before the first cast, and nothing is refused.
+        var (again, pond2) = Make(scores: scores);
+        pond2.CastNeedsCollect = true;
+        Script(pond2, (Small, 5));
+        again.Begin(Ask(castBudget: 1));
+        Run(again, pond2);
+        Assert.Equal([FishingRun.Collect, FishingRun.Cast], pond2.Actions.Take(2));
+        Assert.Single(pond2.Actions, a => a == FishingRun.Cast);
+    }
+
+    [Fact]
+    public void Without_Collect_learned_it_says_the_mission_may_need_it()
+    {
+        var (session, pond) = Make(knows: id => id != FishingRun.Collect);
+        pond.CastNeedsCollect = true;
+        session.Begin(Ask());
+        Assert.Equal(FishSessionState.Faulted, Run(session, pond));
+        Assert.Contains("Inscrutable Tastes", session.Reason);
+    }
+
+    [Fact]
+    public void With_a_prize_known_Prize_Catch_goes_before_every_cast_keeping_GP_for_Identical_Cast()
+    {
+        var (session, pond) = Make(scores: Known(), knows: id => id is not (FishSession.IdenticalCast or FishSession.BigGameFishing));
+        Script(pond, (Small, 5), (Small, 5), (Small, 5));
+        pond.Gp = pond.MaxGp = 800;   // 800, 600, 400: the third would leave less than 350
+        session.Begin(Ask(castBudget: 3));
+        Run(session, pond);
+        var presses = pond.Actions.Where(a => a is FishSession.PrizeCatch or FishingRun.Cast).ToList();
+        Assert.Equal([FishSession.PrizeCatch, FishingRun.Cast, FishSession.PrizeCatch, FishingRun.Cast, FishingRun.Cast], presses);
+        Assert.Equal(400, pond.Gp);
+    }
+
+    [Fact]
+    public void Without_a_mission_or_a_known_prize_there_is_no_Prize_Catch()
+    {
+        var (open, pond) = Make(scores: Known(), mission: 0);
+        Script(pond, (Small, 5));
+        open.Begin(Ask(castBudget: 1));
+        Run(open, pond);
+        Assert.DoesNotContain(FishSession.PrizeCatch, pond.Actions);
+
+        var (fresh, pond2) = Make();   // a mission, nothing known of it yet
+        Script(pond2, (Small, 5));
+        fresh.Begin(Ask(castBudget: 1));
+        Run(fresh, pond2);
+        Assert.DoesNotContain(FishSession.PrizeCatch, pond2.Actions);
+    }
+
+    [Fact]
+    public void Big_game_Fishing_goes_on_a_Prize_Catch_with_two_stacks()
+    {
+        var (session, pond) = Make(scores: Known());
+        Script(pond, (Small, 5));
+        pond.Stacks[FishSession.AnglersArt] = 2;
+        session.Begin(Ask(castBudget: 1));
+        Run(session, pond);
+        Assert.Equal([FishSession.PrizeCatch, FishSession.BigGameFishing, FishingRun.Cast], pond.Actions.Take(3));
+    }
+
+    [Fact]
+    public void An_action_the_game_refuses_is_pressed_once_a_cast_and_holds_nothing_up()
+    {
+        var (session, pond) = Make(scores: Known());
+        Script(pond, (Small, 5), (Small, 5));
+        pond.Refused.Add(FishSession.PrizeCatch);
+        session.Begin(Ask(castBudget: 2));
+        Assert.Equal(FishSessionState.Done, Run(session, pond));
+        Assert.Equal(2, pond.Actions.Count(a => a == FishSession.PrizeCatch));
+        Assert.Equal(2, session.Casts);
     }
 
     [Fact]
@@ -321,8 +418,9 @@ public class FishSessionTests
         Run(session, pond);
 
         var presses = pond.Actions.Where(a => a is not FishingRun.Quit).ToList();
-        Assert.Equal([FishingRun.Cast, FishingRun.Hook, FishSession.IdenticalCast, FishSession.PrizeCatch, FishingRun.Cast, FishingRun.Hook], presses);
-        Assert.Equal(1000 - 350 - 200, pond.Gp);
+        Assert.Equal([FishSession.PrizeCatch, FishingRun.Cast, FishingRun.Hook, FishSession.IdenticalCast, FishSession.PrizeCatch,
+            FishingRun.Cast, FishingRun.Hook], presses);
+        Assert.Equal(1000 - 200 - 350 - 200, pond.Gp);
     }
 
     [Fact]
@@ -340,7 +438,7 @@ public class FishSessionTests
     [Fact]
     public void After_a_prize_Identical_Cast_then_Triple_Hook_when_GP_covers_both()
     {
-        var (session, pond) = Make(scores: Known());
+        var (session, pond) = Make(scores: Known(), knows: id => id != FishSession.PrizeCatch);
         Script(pond, (Big, 5), (Big, 5), (Small, 5));
         pond.Gp = pond.MaxGp = 1050;
         session.Begin(Ask(castBudget: 3));
@@ -356,7 +454,7 @@ public class FishSessionTests
     [Fact]
     public void Short_of_GP_it_double_hooks_or_hooks_plainly_and_fishes_on()
     {
-        var (session, pond) = Make(scores: Known());
+        var (session, pond) = Make(scores: Known(), knows: id => id != FishSession.PrizeCatch);
         Script(pond, (Big, 5), (Big, 5), (Big, 5), (Big, 5));
         pond.Gp = 760;   // Identical Cast, then 410: Double Hook, not Triple
         session.Begin(Ask(castBudget: 4));

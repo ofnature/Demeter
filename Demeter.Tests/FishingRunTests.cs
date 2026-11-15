@@ -106,6 +106,12 @@ public class FishingRunTests
 
         /// <summary>No water in front: a cast does not go in.</summary>
         public bool NoWater { get; set; }
+
+        /// <summary>A mission that wants Collect on: a cast goes in only with it.</summary>
+        public bool CastNeedsCollect { get; set; }
+
+        /// <summary>Actions the game refuses (a recast not up): pressed, and nothing happens.</summary>
+        public HashSet<uint> Refused { get; } = [];
         public List<string> Logged { get; } = [];
         public Action<uint>? OnLanded { get; set; }
 
@@ -144,9 +150,16 @@ public class FishingRunTests
         {
             Actions.Add(actionId);
             Pressed.Add((actionId, UtcNow));
+            if (Refused.Contains(actionId))
+                return false;
             switch (actionId)
             {
-                case FishingRun.Cast when State is FishState.None or FishState.PoleReady && !NoWater:
+                case FishSession.BigGameFishing:
+                    Stacks[FishSession.AnglersArt] -= 2;
+                    Statuses.Add(FishSession.BigGameStatus);
+                    break;
+                case FishingRun.Cast when State is FishState.None or FishState.PoleReady && !NoWater
+                                          && (!CastNeedsCollect || Statuses.Contains(FishingRun.CollectStatus)):
                     Line(CurrentBait);
                     break;
                 case FishingRun.Mooch when CanMooch:

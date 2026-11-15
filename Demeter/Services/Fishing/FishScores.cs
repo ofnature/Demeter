@@ -63,6 +63,22 @@ public sealed class FishScores
     /// <summary>Mission → points an ilm is worth, for a mission scored by its largest fish.</summary>
     public Dictionary<string, double> PointsPerIlm { get; set; } = new();
 
+    /// <summary>Missions whose casts only go in with Collect on (a first cast refused until it was).</summary>
+    public List<uint> NeedsCollectMissions { get; set; } = [];
+
+    public bool NeedsCollect(uint mission) => NeedsCollectMissions.Contains(mission);
+
+    public void MarkNeedsCollect(uint mission)
+    {
+        if (mission == 0 || NeedsCollectMissions.Contains(mission))
+            return;
+        NeedsCollectMissions.Add(mission);
+        Dirty = true;
+    }
+
+    /// <summary>A points mission with at least two of its fish known — enough to tell a prize from the rest.</summary>
+    public bool HasPrize(uint mission) => Missions.GetValueOrDefault(mission.ToString()) is { Count: >= 2 };
+
     /// <summary>Something was recorded since the last save.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool Dirty { get; private set; }
@@ -168,6 +184,9 @@ public sealed class FishScores
     {
         foreach (var (mission, points) in other.PointsPerIlm)
             PointsPerIlm[mission] = points;
+        foreach (var mission in other.NeedsCollectMissions)
+            if (!NeedsCollectMissions.Contains(mission))
+                NeedsCollectMissions.Add(mission);
         foreach (var (mission, fishes) in other.Sizes)
         {
             if (!Sizes.TryGetValue(mission, out var mine))
