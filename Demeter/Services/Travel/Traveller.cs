@@ -44,9 +44,10 @@ public interface ITravel
     /// <summary>
     /// Go to <paramref name="to"/> in <paramref name="territoryId"/>. <paramref name="fly"/> is
     /// "fly if the zone allows it"; <paramref name="land"/> ends the leg on the ground. A stop
-    /// distance of <see cref="Traveller.PointStop"/> means the point itself.
+    /// distance of <see cref="Traveller.PointStop"/> means the point itself. <paramref name="teleport"/>
+    /// false never uses an aetheryte within the zone, however far the point (Selene's stand points).
     /// </summary>
-    void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop);
+    void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop, bool teleport = true);
 
     TravelStatus Tick();
     void Cancel();
@@ -151,6 +152,9 @@ public sealed class Traveller : ITravel
     private Phase _phase;
     private DateTime _phaseStart;
     private uint _territory;
+
+    /// <summary>An aetheryte in the zone may be used when it is far nearer the point.</summary>
+    private bool _teleportInZone = true;
     private Vector3 _to;
     private bool _fly;
     private bool _land;
@@ -209,9 +213,10 @@ public sealed class Traveller : ITravel
     /// <summary>What it is doing, for a status line.</summary>
     public string PhaseName => _heldForFight ? "Waiting out a fight" : _phase.ToString();
 
-    public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = PointStop)
+    public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = PointStop, bool teleport = true)
     {
         _territory = territoryId;
+        _teleportInZone = teleport;
         _to = to;
         _fly = fly;
         _land = land;
@@ -330,7 +335,7 @@ public sealed class Traveller : ITravel
         // crystal beats even the flight — when it wins by a clear margin. (Ariadne can plan teleport
         // legs itself, but only with its session switch on, and that switch is every consumer's.)
         var away = Vector3.Distance(here, _to);
-        if (away > TeleportWorthDistance
+        if (_teleportInZone && away > TeleportWorthDistance
             && _world.NearestAttunedAetheryte(_territory, _to) is { } near
             && _world.AetherytePosition(near) is { } nearAt
             && Vector3.Distance(nearAt, _to) + TeleportMargin < away)

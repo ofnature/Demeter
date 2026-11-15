@@ -62,7 +62,7 @@ public class FishGathererTests
         public TravelStatus Status => TravelStatus.Running;
         public string FailReason => string.Empty;
         public TravelFailure Failure => TravelFailure.None;
-        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop) => LastTerritory = territoryId;
+        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop, bool teleport = true) => LastTerritory = territoryId;
         public TravelStatus Tick() => TravelStatus.Running;
         public void Cancel() { }
     }

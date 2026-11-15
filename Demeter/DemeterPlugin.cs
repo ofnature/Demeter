@@ -56,6 +56,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly FishSession _session = null!;
     private readonly FishGateway _fishGate = null!;
     private readonly FishScores _scores = null!;
+    private readonly FishStand _stand = null!;
     private readonly GpMeter _gp = new();
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
@@ -111,8 +112,10 @@ public sealed class DemeterPlugin : IDalamudPlugin
             // Phase 2: getting to a hole — the community's recorded stand points, Lifestream and Ariadne
             // to get there, a test cast to prove it, and what worked remembered per hole.
             var holes = FishingHoles.Load(FishingHoles.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
-            _approach = new HoleApproach(new GameFishingWorld(_game, gatherWorld, ObjectTable, Condition, message => Say(message)),
-                new Traveller(_game), SaveConfig);
+            var holeWorld = new GameFishingWorld(_game, gatherWorld, ObjectTable, Condition, message => Say(message));
+            _approach = new HoleApproach(holeWorld, new Traveller(_game), SaveConfig);
+            // A place another plugin chose (Selene): walk there in the zone and face the water.
+            _stand = new FishStand(holeWorld, new Traveller(_game), () => _game.TerritoryId, () => _game.PlayerPosition);
             // Phase 3: the fisher — cast, judge each bite, hook or let go, mooch, Intuition, stop at the count.
             var spots = new FishSpots(DataManager, message => Warn(message));
             _fisherWorld = new GameFisherWorld(_game, gatherWorld, GameGui, ObjectTable, SigScanner, GameInterop, message => Say(message));
@@ -159,14 +162,16 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _game.ItemCount,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy,
                 message => Say(message));
-            _fishGate = new FishGateway(_session, () => _config.Enabled,
+            _fishGate = new FishGateway(_session, _stand, () => _config.Enabled,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning || _approach.Busy || _fishing.Busy,
                 message => Say(message));
 
             _fishWindow = new FishWindow(fish, spots, holes, _approach, GoToHole, FishHere, _fishing,
                 () => _lists.State == GatherListRunState.Running || _items.IsRunning,
                 () => _fisherWorld.CurrentBait is var bait and not 0 ? (bait, _fisherWorld.ItemCount(bait)) : (0u, 0),
-                _session, () => _fishGate.Start("{\"requestedBy\":\"Demeter's Fish window\"}"), () => _fishGate.LastRefusal, _gp);
+                _session, () => _fishGate.Start("{\"requestedBy\":\"Demeter's Fish window\"}"), () => _fishGate.LastRefusal, _gp,
+                _stand, request => _fishGate.StandAt(System.Text.Json.JsonSerializer.Serialize(request)),
+                () => ObjectTable.LocalPlayer is { } player ? (player.Position, player.Rotation) : null);
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);
@@ -313,6 +318,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
         _items.RequestStopAfterRun();
         if (_session.Busy)
             _session.Stop();
+        if (_stand.Busy)
+            _stand.Cancel();
         if (_fishingDirect)
         {
             if (_fishing.Busy)
@@ -324,7 +331,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     }
 
     /// <summary>Going to a hole, or fishing at one — whoever started it.</summary>
-    private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true || _session?.Busy == true;
+    private bool FishingBusy => _approach?.Busy == true || _fishing?.Busy == true || _session?.Busy == true || _stand?.Busy == true;
 
     /// <summary>"The fish sense something amiss. Perhaps it is time to try another location."</summary>
     private const uint AmissLogMessage = 3516;
@@ -436,6 +443,13 @@ public sealed class DemeterPlugin : IDalamudPlugin
         }
 #endif
 
+        // Walking to a place a gate caller chose (or the Fish window's mark).
+        if (_stand.Busy)
+        {
+            _stand.Tick();
+            return;
+        }
+
         // Fishing where the character stands, for a gate caller or the Fish window's "Fish here".
         if (_session.Busy)
         {
@@ -509,6 +523,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     {
         if (_session.Busy)
             _session.Cancel();
+        _stand.Cancel();
         if (_fishing.Busy)
             _fishing.Cancel();
         if (_approach.Busy)

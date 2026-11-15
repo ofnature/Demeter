@@ -33,6 +33,12 @@ public sealed class FishWindow : DemeterWindow
     private readonly Func<bool> _fishWhereStanding;
     private readonly Func<string> _lastRefusal;
     private readonly GpMeter _gp;
+
+    /// <summary>StandAt, tried by hand: mark where you stand, walk off, and come back to it.</summary>
+    private readonly FishStand _stand;
+    private readonly Func<FishStandRequest, bool> _standAt;
+    private readonly Func<(Vector3 Position, float Rotation)?> _here;
+    private (Vector3 Position, float Rotation)? _mark;
     private int _count = 1;
     private readonly List<(uint Id, string Name)> _names;
     private string _filter = string.Empty;
@@ -44,8 +50,12 @@ public sealed class FishWindow : DemeterWindow
     public FishWindow(FishCatalog catalog, FishSpots spots, FishingHoles holes, HoleApproach approach,
         Action<FishingHole, IReadOnlyList<StandPoint>> goThere, Action<FishInfo, int, FishingHole, IReadOnlyList<StandPoint>> fishHere,
         FishingRun run, Func<bool> otherBusy, Func<(uint Bait, int Count)> bait,
-        FishSession session, Func<bool> fishWhereStanding, Func<string> lastRefusal, GpMeter gp) : base("Demeter Fish###DemeterFish")
+        FishSession session, Func<bool> fishWhereStanding, Func<string> lastRefusal, GpMeter gp,
+        FishStand stand, Func<FishStandRequest, bool> standAt, Func<(Vector3 Position, float Rotation)?> here) : base("Demeter Fish###DemeterFish")
     {
+        _stand = stand;
+        _standAt = standAt;
+        _here = here;
         _gp = gp;
         _bait = bait;
         _session = session;
@@ -221,7 +231,8 @@ public sealed class FishWindow : DemeterWindow
             return;
         }
         var wants = _catalog.ById(_selected)?.Path is { Count: > 0 } road ? road[0] : 0u;
-        var colour = wants == 0 || wants == bait ? DemeterTheme.StatusGreen : DemeterTheme.StatusYellow;
+        var colour = count <= 0 ? DemeterTheme.StatusRed
+            : wants == 0 || wants == bait ? DemeterTheme.StatusGreen : DemeterTheme.StatusYellow;
         ImGui.TextColored(colour, $"· Bait: {_spots.ItemName(bait)} ×{count}");
         if (ImGui.IsItemHovered() && wants != 0 && wants != bait)
             ImGui.SetTooltip($"{_spots.ItemName(_selected)} starts with {_spots.ItemName(wants)} — Fish puts it on for you.");
@@ -246,6 +257,15 @@ public sealed class FishWindow : DemeterWindow
             return;
         }
 
+        if (_stand.Busy)
+        {
+            if (DemeterTheme.IconTextButton(Dalamud.Interface.FontAwesomeIcon.Stop, "Stop##standat", DemeterTheme.RedDark, "Stop walking to the spot."))
+                _stand.Cancel();
+            ImGui.SameLine();
+            ImGui.TextColored(DemeterTheme.WakeFoam, $"Standing to fish: {_stand.Reason}");
+            return;
+        }
+
         var busy = _approach.Busy || _run.Busy || _otherBusy();
         using (ImRaii.Disabled(busy))
         {
@@ -256,6 +276,31 @@ public sealed class FishWindow : DemeterWindow
             ImGui.SetTooltip("Fish from where you stand, with the bait that is on (Cosmic Exploration's too): every bite hooked, "
                              + "no bait change, a varied pace. Stops when you press Stop, the bait runs out, or the fish sense something amiss.");
         ImGui.SameLine();
+        if (ImGui.SmallButton("Mark spot"))
+            _mark = _here();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(_mark is { } m
+                ? $"Marked at ({m.Position.X:F1}, {m.Position.Y:F1}, {m.Position.Z:F1}), facing {m.Rotation:F2}. Press again to mark here instead."
+                : "Remember where you stand and which way you face, to try \"Stand at mark\" — what Selene asks of Demeter.Fish.StandAt.");
+        ImGui.SameLine();
+        using (ImRaii.Disabled(busy || _mark is null))
+        {
+            if (ImGui.SmallButton("Stand at mark") && _mark is { } mark)
+                _standAt(new FishStandRequest
+                {
+                    RequestedBy = "Demeter's Fish window",
+                    Points = [new StandPointRequest { X = mark.Position.X, Y = mark.Position.Y, Z = mark.Position.Z, Facing = mark.Rotation }],
+                });
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Walk back to the marked spot in this zone (never a teleport) and face the way you faced. Then \"Fish here\".");
+        ImGui.SameLine();
+        if (_stand.State is FishStandState.Stood or FishStandState.Faulted && _lastRefusal().Length == 0
+            && _session.State is FishSessionState.Idle)
+        {
+            ImGui.TextColored(_stand.State == FishStandState.Faulted ? DemeterTheme.StatusRed : DemeterTheme.StatusGreen, $"Stand: {_stand.Reason}.");
+            return;
+        }
         if (_lastRefusal() is { Length: > 0 } refused)
             ImGui.TextColored(DemeterTheme.StatusRed, $"Can't: {refused}");
         else if (_session.State is FishSessionState.Done or FishSessionState.StoppedAsAsked or FishSessionState.Faulted)

@@ -11,7 +11,7 @@ public class HoleApproachTests
     private static StandPoint At(float x, float rotation = 1f, int uses = 1) => new() { X = x, Y = 0, Z = 0, Rotation = rotation, Uses = uses };
 
     /// <summary>The hole as the game sees it: a cast takes only from the stand points listed as wet.</summary>
-    private sealed class World : IHoleWorld
+    internal sealed class World : IHoleWorld
     {
         public DateTime UtcNow { get; set; } = new(2026, 10, 22, 12, 0, 0, DateTimeKind.Utc);
         public bool IsOccupied { get; set; }
@@ -55,7 +55,7 @@ public class HoleApproachTests
     }
 
     /// <summary>Arrives at once, except at the points listed as unreachable.</summary>
-    private sealed class Travel(World world) : ITravel
+    internal sealed class Travel(World world) : ITravel
     {
         public HashSet<float> Unreachable { get; } = [];
 
@@ -65,12 +65,16 @@ public class HoleApproachTests
         public string FailReason { get; private set; } = string.Empty;
         public TravelFailure Failure { get; private set; }
         public List<Vector3> Legs { get; } = [];
+
+        /// <summary>Each leg as asked: the zone, whether it may fly, whether it may teleport.</summary>
+        public List<(uint Territory, bool Fly, bool Teleport)> Asked { get; } = [];
         private Vector3 _to;
 
-        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop)
+        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop, bool teleport = true)
         {
             _to = to;
             Legs.Add(to);
+            Asked.Add((territoryId, fly, teleport));
             Status = TravelStatus.Running;
         }
 

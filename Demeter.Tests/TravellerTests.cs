@@ -42,6 +42,27 @@ public class TravellerTests
     }
 
     [Fact]
+    public void Far_in_the_same_zone_it_teleports_to_a_nearer_aetheryte_unless_told_not_to()
+    {
+        var far = new Vector3(1000, 0, 1000);
+        var world = new FakeTravelWorld { TerritoryId = 1187, ArriveOnMove = true };
+        world.Attuned[2] = (1187, new Vector3(990, 0, 990));
+
+        var travel = new Traveller(world);
+        travel.Begin(1187, far, fly: false, land: false);
+        Assert.Equal(TravelStatus.Done, Run(travel, world));
+        Assert.Contains("Teleport 2", world.Calls);
+
+        var walker = new FakeTravelWorld { TerritoryId = 1187, ArriveOnMove = true };
+        walker.Attuned[2] = (1187, new Vector3(990, 0, 990));
+        var walk = new Traveller(walker);
+        walk.Begin(1187, far, fly: false, land: false, teleport: false);
+        Assert.Equal(TravelStatus.Done, Run(walk, walker));
+        Assert.DoesNotContain(walker.Calls, c => c.StartsWith("Teleport", StringComparison.Ordinal));
+        Assert.Equal(far, walker.LastMoveTarget);
+    }
+
+    [Fact]
     public void A_zone_with_nothing_attuned_fails_and_says_so()
     {
         var world = new FakeTravelWorld { TerritoryId = 129 };

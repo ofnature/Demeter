@@ -518,7 +518,7 @@ public class FishSessionTests
         var (session, pond) = Make();
         var othersBusy = false;
         var log = new List<string>();
-        var gate = new FishGateway(session, () => true, () => othersBusy, log.Add);
+        var gate = new FishGateway(session, new FishStand(new HoleApproachTests.World(), new HoleApproachTests.Travel(new HoleApproachTests.World()), () => 0, () => default), () => true, () => othersBusy, log.Add);
 
         using (var ok = JsonDocument.Parse(gate.CanFishHere("{\"requestedBy\":\"Selene\"}")))
         {
@@ -555,7 +555,7 @@ public class FishSessionTests
     public void Switched_off_the_gate_says_so()
     {
         var (session, _) = Make();
-        var gate = new FishGateway(session, () => false, () => false, _ => { });
+        var gate = new FishGateway(session, new FishStand(new HoleApproachTests.World(), new HoleApproachTests.Travel(new HoleApproachTests.World()), () => 0, () => default), () => false, () => false, _ => { });
         using var doc = JsonDocument.Parse(gate.CanFishHere("{}"));
         Assert.Equal("off", doc.RootElement.GetProperty("code").GetString());
     }

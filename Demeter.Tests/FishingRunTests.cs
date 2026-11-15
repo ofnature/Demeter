@@ -276,7 +276,7 @@ public class FishingRunTests
         public TravelStatus Status { get; private set; }
         public string FailReason => string.Empty;
         public TravelFailure Failure => TravelFailure.None;
-        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop) => Status = TravelStatus.Running;
+        public void Begin(uint territoryId, Vector3 to, bool fly, bool land, float stopDistance = Traveller.PointStop, bool teleport = true) => Status = TravelStatus.Running;
         public TravelStatus Tick() => Status = TravelStatus.Done;
         public void Cancel() => Status = TravelStatus.Idle;
     }

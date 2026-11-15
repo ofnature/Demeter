@@ -34,7 +34,7 @@ public enum FishSessionState { Idle, Running, Finishing, Done, StoppedAsAsked, F
 public enum FishSessionCode
 {
     None, BadRequest, Off, Busy, NotFisher, NoBait, CannotFishHere, LineStuck, Stalled, Amiss, CastBudget, TimeBudget,
-    MissionComplete,
+    MissionComplete, CannotReach,
 }
 
 /// <summary>The last bite: when it came, how it tugged, and whether it was hooked.</summary>

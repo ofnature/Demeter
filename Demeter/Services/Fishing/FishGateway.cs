@@ -17,7 +17,10 @@ public sealed class FishCheckDto
 /// <summary>What <c>Demeter.Fish.GetStatusJson</c> answers. camelCase, extend-only.</summary>
 public sealed class FishStatusDto
 {
-    /// <summary>idle, running, finishing, done, stoppedAsAsked or faulted.</summary>
+    /// <summary>
+    /// idle, running, finishing, done, stoppedAsAsked or faulted for fishing; after a StandAt, standing
+    /// (walking or turning), stood (there, facing the water), or faulted (code cannotReach).
+    /// </summary>
     public string State { get; set; } = "idle";
     public string Code { get; set; } = "none";
     public string Reason { get; set; } = string.Empty;
@@ -37,6 +40,9 @@ public sealed class FishStatusDto
 
     /// <summary>The mission's whole score, as the game keeps it.</summary>
     public uint MissionScore { get; set; }
+
+    /// <summary>After a StandAt: the point stood at or walked to, 1-based (0 for none).</summary>
+    public int StandPoint { get; set; }
     public int Gp { get; set; }
     public int MaxGp { get; set; }
 }
@@ -65,14 +71,19 @@ public sealed class FishGateway
     };
 
     private readonly FishSession _session;
+    private readonly FishStand _stand;
+
+    /// <summary>The last thing asked was a StandAt: the status speaks of it until a Start.</summary>
+    private bool _standLast;
     private readonly Func<bool> _enabled;
     private readonly Func<bool> _othersBusy;
     private readonly Action<string> _log;
 
     /// <param name="othersBusy">Anything else of Demeter's driving the character: a list, an item, the Fish window's runs.</param>
-    public FishGateway(FishSession session, Func<bool> enabled, Func<bool> othersBusy, Action<string> log)
+    public FishGateway(FishSession session, FishStand stand, Func<bool> enabled, Func<bool> othersBusy, Action<string> log)
     {
         _session = session;
+        _stand = stand;
         _enabled = enabled;
         _othersBusy = othersBusy;
         _log = log;
@@ -94,6 +105,7 @@ public sealed class FishGateway
         if (code == FishSessionCode.None && _session.Begin(request!))
         {
             LastRefusal = string.Empty;
+            _standLast = false;
             return true;
         }
         if (code == FishSessionCode.None)
@@ -103,12 +115,67 @@ public sealed class FishGateway
         return false;
     }
 
-    public void Stop() => _session.Stop();
+    /// <summary>Walk to the first point that can be reached and face the water. True when the walk began.</summary>
+    public bool StandAt(string json)
+    {
+        FishStandRequest? request = null;
+        FishSessionCode code;
+        string reason;
+        try
+        {
+            request = JsonSerializer.Deserialize<FishStandRequest>(string.IsNullOrWhiteSpace(json) ? "{}" : json, Json)
+                      ?? new FishStandRequest();
+            (code, reason) = Gate(request.RequestedBy);
+            if (code == FishSessionCode.None)
+                (code, reason) = _stand.Check(request);
+        }
+        catch (JsonException ex)
+        {
+            (code, reason) = (FishSessionCode.BadRequest, $"the request is not JSON Demeter reads ({ex.Message})");
+        }
+        if (code == FishSessionCode.None && _stand.Begin(request!))
+        {
+            LastRefusal = string.Empty;
+            _standLast = true;
+            return true;
+        }
+        if (code == FishSessionCode.None)
+            (code, reason) = (_stand.Code, _stand.Reason);
+        LastRefusal = reason;
+        _log($"Asked to stand at a fishing spot{(request?.RequestedBy is { Length: > 0 } who ? $" by {who}" : string.Empty)} — refused: {reason} ({Text(code)}).");
+        return false;
+    }
+
+    /// <summary>Fishing: after the cast in hand. Walking to a point: now.</summary>
+    public void Stop()
+    {
+        _stand.Cancel();
+        _session.Stop();
+    }
 
     public string StatusJson()
     {
         try
         {
+            if (_standLast)
+                return Serialize(new FishStatusDto
+                {
+                    State = _stand.State switch
+                    {
+                        FishStandState.Walking or FishStandState.Facing => "standing",
+                        FishStandState.Stood => "stood",
+                        FishStandState.Faulted => "faulted",
+                        _ => "idle",
+                    },
+                    Code = Text(_stand.Code),
+                    Reason = _stand.Reason,
+                    RequestedBy = _stand.RequestedBy,
+                    StandPoint = _stand.Point,
+                    Mission = _session.Mission,
+                    MissionScore = _session.MissionScore,
+                    Gp = _session.Gp,
+                    MaxGp = _session.MaxGp,
+                });
             return Serialize(new FishStatusDto
             {
                 State = Text(_session.State),
@@ -146,13 +213,22 @@ public sealed class FishGateway
         {
             return (FishSessionCode.BadRequest, $"the request is not JSON Demeter reads ({ex.Message})");
         }
+        var (code, reason) = Gate(request.RequestedBy);
+        return code != FishSessionCode.None ? (code, reason) : _session.Check(request);
+    }
+
+    /// <summary>What refuses any request: Demeter off, or anything of Demeter's already driving.</summary>
+    private (FishSessionCode Code, string Reason) Gate(string requestedBy)
+    {
         if (!_enabled())
             return (FishSessionCode.Off, "Demeter is switched off");
         if (_session.Busy)
             return (FishSessionCode.Busy, $"already fishing here for {(_session.RequestedBy.Length > 0 ? _session.RequestedBy : "a caller")}");
+        if (_stand.Busy)
+            return (FishSessionCode.Busy, $"already walking to a fishing spot for {(_stand.RequestedBy.Length > 0 ? _stand.RequestedBy : "a caller")}");
         if (_othersBusy())
             return (FishSessionCode.Busy, "Demeter is busy with something else");
-        return _session.Check(request);
+        return (FishSessionCode.None, string.Empty);
     }
 
     private static string Serialize<T>(T value) => JsonSerializer.Serialize(value, Json);
