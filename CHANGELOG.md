@@ -1,7 +1,7 @@
 # Changelog
 
 <!-- LATEST-START -->
-## v0.0.1 — unreleased
+## v0.1.0 — 2026-11-14
 
 ### Gathering, moved out of Odysseus
 - Demeter is Odysseus's gatherer as a plugin of its own. It has the same node runner, collectable rotation, timed-node windows, gather lists, presets, self-repair and "Afterwards" home trip. Your gather lists and settings are brought over from Odysseus's config on first load
