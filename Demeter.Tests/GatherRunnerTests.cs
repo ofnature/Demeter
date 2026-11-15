@@ -201,6 +201,18 @@ public class GatherRunnerTests
         return (runner, world);
     }
 
+    /// <summary>Ariadne's every move ends here, as near the node as the mesh goes.</summary>
+    private static (GatherRunner Runner, World World, FakeTravelWorld Fake) Short(GatheringTarget target, Vector3 meshEnds)
+    {
+        var world = new World { PlayerPosition = meshEnds };
+        var fake = new FakeTravelWorld { TerritoryId = 1187, ArriveOnMove = true, ResultOnArrive = "closest reachable point", PlayerPosition = meshEnds };
+        var runner = new GatherRunner(world, new Traveller(fake));
+        world.Spawned.Add(target.NodeId);
+        world.Up.Add(target.NodeId);
+        world.NodeAt[target.NodeId] = target.Spawns[0];
+        return (runner, world, fake);
+    }
+
     private static void Run(GatherRunner runner, World world, int ticks = 200)
     {
         for (var i = 0; i < ticks && runner.State is not (GatherRunState.Done or GatherRunState.Faulted); i++)
@@ -343,6 +355,40 @@ public class GatherRunnerTests
         fake.IsInFlight = false; fake.IsMounted = false;
         for (var i = 0; i < 6 && runner.State == GatherRunState.Walking; i++) { runner.Tick(); world.Advance(0.5); fake.Advance(0.5); }
         Assert.NotEqual(GatherRunState.Walking, runner.State);
+    }
+
+    [Fact]
+    public void A_node_Ariadne_stops_short_of_is_tried_from_there_not_walked_at_for_minutes()
+    {
+        // The mesh ends 4.5y off the node (on a rock): Ariadne says it has arrived, and the old
+        // walk asked it again and again until the three-minute budget ran out.
+        var node = new Vector3(10, 0, 10);
+        var target = Target(node);
+        var (runner, world, fake) = Short(target, new Vector3(10, 0, 14.5f));
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 20 && runner.State is not (GatherRunState.Working or GatherRunState.Faulted); i++)
+        { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Working, runner.State);
+        Assert.Equal(1, world.Interacts);
+        Assert.Contains(world.Log, l => l.Contains("goes no closer"));
+    }
+
+    [Fact]
+    public void A_node_that_will_not_open_from_as_near_as_Ariadne_goes_is_set_aside()
+    {
+        var node = new Vector3(10, 0, 10);
+        var target = Target(node);
+        var (runner, world, fake) = Short(target, new Vector3(10, 0, 15.5f));   // the game wants it nearer than this
+        world.OpensAt = node;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        // 90 seconds: the old walk was still asking Ariadne.
+        for (var i = 0; i < 60 && runner.State is not (GatherRunState.Done or GatherRunState.Faulted); i++)
+        { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Faulted, runner.State);
+        Assert.Equal(1, world.Interacts);   // tried once, then left alone
+        Assert.Contains(world.Log, l => l.Contains("set aside for this run"));
     }
 
     [Fact]

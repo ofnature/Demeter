@@ -1,8 +1,10 @@
 # Changelog
 
 <!-- LATEST-START -->
-## Unreleased
+## v0.1.1 — 2026-11-15
 
+- A log button in the main window's top row opens demeter.log's folder with the file selected, ready to send
+- A node Ariadne cannot get within reach of (on a rock, above a lip) is tried from where it stopped instead of walked at for three minutes; one that will not open from there is set aside for the rest of the run and the next node gone for. A circuit stop Ariadne cannot quite reach counts as reached
 - Cosmic missions fished the way a Gold Star was fished by hand: the GP spent on a mission comes back when it is complete, so once a mission's prize fish is known, Prize Catch goes on before every cast — never out of the GP an Identical Cast would need — with Big-game Fishing on top at two Angler's Art stacks. A mission whose first cast will not go in gets Collect turned on and one more cast; when that works the mission is remembered (and shipped) as needing Collect, and it goes on before the first cast from then on. Each special action is pressed at most once a cast, so one the game refuses holds nothing up
 
 ## v0.1.0 — 2026-11-14

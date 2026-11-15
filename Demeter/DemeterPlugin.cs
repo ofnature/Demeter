@@ -182,7 +182,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _config, SaveConfig, _lists, _gateway, _items, _gatherer, gatherables.NameOf, abilities, _game.LevelOfJob,
                 PluginLoaded, ToggleLists,
                 _debugWindow is null ? null : () => _debugWindow.IsOpen = true,
-                StopAll));
+                StopAll, ShowLogFile));
 
             _ipc = new DemeterIpc(PluginInterface, IsBusy, RequestStopAfterRun, _gateway, _items, _fishGate, ToggleLists);
 
@@ -272,6 +272,22 @@ public sealed class DemeterPlugin : IDalamudPlugin
         catch (Exception ex)
         {
             Log.Warning($"Own log file unavailable ({ex.GetType().Name}: {ex.Message}); Dalamud's log only.");
+        }
+    }
+
+    /// <summary>Explorer at demeter.log, selected, ready to be dragged into a message.</summary>
+    private void ShowLogFile()
+    {
+        var folder = PluginInterface.ConfigDirectory.FullName;
+        var file = Path.Combine(folder, "demeter.log");
+        try
+        {
+            var args = File.Exists(file) ? $"/select,\"{file}\"" : $"\"{folder}\"";
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", args) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Warn($"Could not open the log's folder ({ex.Message}): {file}");
         }
     }
 

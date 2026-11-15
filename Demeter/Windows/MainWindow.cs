@@ -22,7 +22,8 @@ public sealed record MainWindowDeps(
     Func<string, bool> PluginLoaded,
     Action ToggleLists,
     Action? OpenDebug,
-    Action StopAll);
+    Action StopAll,
+    Action ShowLog);
 
 /// <summary>
 /// The main window: what Demeter is doing and for whom, a Stop, the way to the gather lists, and
@@ -114,6 +115,9 @@ public sealed class MainWindow : DemeterWindow
             IsOpen = _inDock;
             _d.SaveConfig();
         }
+        ImGui.SameLine();
+        if (DemeterTheme.IconButton("log", FontAwesomeIcon.FileAlt, "Show demeter.log in its folder — the file to send when something goes wrong"))
+            _d.ShowLog();
         if (_d.OpenDebug is { } openDebug)
         {
             ImGui.SameLine();

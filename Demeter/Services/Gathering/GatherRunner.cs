@@ -210,6 +210,12 @@ public sealed class GatherRunner
     private uint _currentNode;
     private Vector3 _travelTo;
     private readonly List<uint> _nodeIds = [];
+
+    /// <summary>Nodes tried from where Ariadne gave out that would not open: left alone for the rest of the run.</summary>
+    private readonly HashSet<uint> _setAside = [];
+
+    /// <summary>The opening under way is from short of reach, because the mesh goes no closer.</summary>
+    private bool _fromShort;
     private bool _lastOpenAccepted;
     private DateTime _stoppedAt;
     private DateTime _slotChosenAt;
@@ -279,6 +285,7 @@ public sealed class GatherRunner
         var target = targets[0];
         _stops.Clear();
         _nodeIds.Clear();
+        _setAside.Clear();
         foreach (var t in targets)
         {
             if (t.TerritoryId != target.TerritoryId || t.ClassJobId != target.ClassJobId)
@@ -447,7 +454,8 @@ public sealed class GatherRunner
         // What is actually up, of everything that yields this item. Any live node beats every
         // recorded coordinate: the coordinates only say where nodes *can* be, and most of them are
         // not there at any given moment.
-        if (_world.NearestLiveNode(_nodeIds) is { } live)
+        var looking = _setAside.Count == 0 ? _nodeIds : System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(_nodeIds, id => !_setAside.Contains(id)));
+        if (_world.NearestLiveNode(looking) is { } live)
         {
             _currentNode = live.NodeId;
             Status = $"Node {live.NodeId}, {live.Distance:F0}y away";
@@ -463,17 +471,18 @@ public sealed class GatherRunner
                     _travel.Tick();
                     return;
                 }
-                _travel.Cancel();
-                _opens = 0;
-                _stoppedAt = default;
-                _slotChosenAt = default;
-                _plainPressed = false;
-                _plainPressTook = false;
-                _revisit = false;
-                _spentAt = default;
-                _world.ForgetSlotAttempts();
-                _fallback = null;
-                Enter(GatherRunState.Opening);
+                BeginOpening(fromShort: false);
+                return;
+            }
+
+            // Ariadne has finished, short of it: the mesh ends before the node does — a node on a
+            // rock or above a lip. Asking again only gets the same answer, and that went on for the
+            // whole three-minute walk budget. Try from here once and let the game judge the reach;
+            // a node that will not open from here is set aside and the next one gone for.
+            if (_travel.Status == TravelStatus.Done && _travelTo == live.Position)
+            {
+                _world.Log($"Node {live.NodeId}: Ariadne stopped {live.Distance:F1}y from it and goes no closer — trying it from here.");
+                BeginOpening(fromShort: true);
                 return;
             }
 
@@ -494,7 +503,9 @@ public sealed class GatherRunner
         var stop = _stops[_spawn % _stops.Count];
         Status = $"Nothing up nearby — stop {_spawn % _stops.Count + 1} of {_stops.Count}";
 
-        if (Vector3.Distance(_world.PlayerPosition, stop.Position) <= Traveller.DefaultStopDistance + Traveller.ArrivalSlack)
+        // There, or as near as Ariadne goes: the stop is only for looking around.
+        if (Vector3.Distance(_world.PlayerPosition, stop.Position) <= Traveller.DefaultStopDistance + Traveller.ArrivalSlack
+            || (_travel.Status == TravelStatus.Done && _travelTo == stop.Position))
         {
             _travel.Cancel();
             NextSpot("nothing up here");
@@ -529,7 +540,9 @@ public sealed class GatherRunner
         {
             _revisit = false;
             var reach = _world.DistanceToDataId(_currentNode);
-            NextSpot($"would not open after {_opens} attempt(s) — " +
+            if (_fromShort)
+                _setAside.Add(_currentNode);
+            NextSpot($"would not open after {_opens} attempt(s){(_fromShort ? " from as near as Ariadne goes — set aside for this run" : string.Empty)} — " +
                      $"{(reach is { } d ? $"{d:F1}y away" : "not in the object table")}, " +
                      $"mounted={_world.IsMounted}, last interact returned {_lastOpenAccepted}");
             return;
@@ -551,7 +564,7 @@ public sealed class GatherRunner
         // Level with it. GatherBuddy requires under three yalms of vertical separation before it
         // will interact, and a node reached from above or below is one the game refuses — which
         // looks from here like an interaction that did nothing.
-        if (_world.PositionOfDataId(_currentNode) is { } where
+        if (!_fromShort && _world.PositionOfDataId(_currentNode) is { } where
             && Math.Abs(where.Y - _world.PlayerPosition.Y) >= VerticalReach)
         {
             if (_travel.Status != TravelStatus.Running)
@@ -654,6 +667,7 @@ public sealed class GatherRunner
                 _world.Log($"Node {_currentNode} came back (Revisit) — working it again.");
                 _spentAt = default;
                 _revisit = true;
+                _fromShort = false;
                 _opens = 0;
                 _stoppedAt = default;
                 _slotChosenAt = default;
@@ -880,6 +894,22 @@ public sealed class GatherRunner
     /// reroute for a descent that never touches down, and the node is worked from the ground.
     /// </summary>
     private void Walk(Vector3 to, uint territory) => _travel.Begin(territory, to, fly: true, land: true);
+
+    private void BeginOpening(bool fromShort)
+    {
+        _travel.Cancel();
+        _fromShort = fromShort;
+        _opens = 0;
+        _stoppedAt = default;
+        _slotChosenAt = default;
+        _plainPressed = false;
+        _plainPressTook = false;
+        _revisit = false;
+        _spentAt = default;
+        _world.ForgetSlotAttempts();
+        _fallback = null;
+        Enter(GatherRunState.Opening);
+    }
 
     private void Enter(GatherRunState state)
     {
