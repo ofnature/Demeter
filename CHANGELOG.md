@@ -1,6 +1,12 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.4 — 2026-11-15
+
+- An item is gathered in a zone this character can work: high enough for its nodes, with an aetheryte attuned to get there. Ice Crystal went to Yak T'el for its many spots, on a level 50 character with no way in, instead of the South Shroud
+- When Ariadne finds no way to any spot in a zone, the gather moves to the next zone that has the item rather than stopping, and passes that zone over for the rest of the session
+- The log names zones as well as numbering them: "territory 1189 (Yak T'el)"
+
 ## v0.1.3 — 2026-11-15
 
 - A node the game opens and shuts again at once (stood just too far for it) is no longer taken for a Revisit and asked again every second: Demeter walks right up to it and asks once more, and if it still shuts, leaves it two minutes and goes on to the next

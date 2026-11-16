@@ -250,6 +250,9 @@ public sealed class GatherRunner
     public string Status { get; private set; } = string.Empty;
     public string FailReason { get; private set; } = string.Empty;
 
+    /// <summary>The fault is a zone Ariadne has no way around, not the nodes: another zone may do.</summary>
+    public bool NoWayInZone { get; private set; }
+
     /// <summary>How many are held at the collectability asked for.</summary>
     public int Held => _target is null ? 0 : _world.CollectableCount(_itemId, _collectability);
 
@@ -331,6 +334,7 @@ public sealed class GatherRunner
         _currentNode = target.NodeId;
         _travelTo = default;
         FailReason = string.Empty;
+        NoWayInZone = false;
         _stopAfterNode = false;
         Enter(GatherRunState.SwitchingJob);
     }
@@ -462,12 +466,12 @@ public sealed class GatherRunner
             return;
         }
 
-        Status = $"Travelling to territory {target.TerritoryId}";
+        Status = $"Travelling to {Zones.Describe(target.TerritoryId)}";
         if (_travel.Status != TravelStatus.Running)
             Walk(target.Spawns[0], target.TerritoryId);
 
         if (_travel.Tick() == TravelStatus.Failed)
-            Fault($"could not reach territory {target.TerritoryId}: {_travel.FailReason}");
+            Fault($"could not reach {Zones.Describe(target.TerritoryId)}: {_travel.FailReason}");
     }
 
     private void TickWalk()
@@ -932,7 +936,8 @@ public sealed class GatherRunner
             _lastUnreachable = unreachable;
             if (_unreachableRun >= _stops.Count)
             {
-                Fault($"Ariadne found no way to any of the {_stops.Count} spots for item {_itemId} in territory {_target!.TerritoryId} " +
+                NoWayInZone = true;
+                Fault($"Ariadne found no way to any of the {_stops.Count} spots for item {_itemId} in {Zones.Describe(_target!.TerritoryId)} " +
                       $"(last: {_lastUnreachable}) — the problem is Ariadne's mesh for this zone, not the nodes");
                 return;
             }

@@ -101,10 +101,14 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 Abilities = abilities,
             };
             var source = new GatheringSource(DataManager, message => Warn(message));
+            var territories = DataManager.GetExcelSheet<Lumina.Excel.Sheets.TerritoryType>();
+            Zones.Name = id => territories.GetRowOrDefault(id)?.PlaceName.ValueNullable?.Name.ExtractText();
             var atlas = new NodeAtlas(NodeAtlas.PathBeside(PluginInterface.AssemblyLocation.DirectoryName), message => Warn(message));
             var nodes = new OwnGatherer(new GatherRunner(gatherWorld, new Traveller(_game)), source, atlas, message => Say(message))
             {
                 Enabled = _config.Enabled,
+                Workable = t => _game.LevelOfJob(t.ClassJobId) >= t.Level
+                    && (t.TerritoryId == _game.TerritoryId || _game.RouteTo(t.TerritoryId, t.Spawns[0]) is not null),
             };
 
             // Fishing, phase 1: what is known about every fish, and when each can next be caught.
@@ -144,7 +148,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             // The list gate's promise is stricter than the gatherer's own CanGather: a node has to
             // exist AND this character has to be able to work it, because a crafting queue plans
             // on the answer. A fish is the fisher's to answer for.
-            GatheringTarget? PlanFor(uint itemId) => _config.Enabled ? GatheringPlan.For(itemId, source, atlas) : null;
+            GatheringTarget? PlanFor(uint itemId) => _config.Enabled ? nodes.Choose(itemId) : null;
             _items = new ItemGateway(_gatherer, () => _config.Enabled,
                 () => _lists.State == GatherListRunState.Running || FishingBusy, message => Say(message));
             _gateway = new GatherGateway(
@@ -299,6 +303,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
     public void Dispose()
     {
+        Zones.Name = null;
         CommandManager.RemoveHandler(CommandMain);
         Framework.Update -= OnFrameworkUpdate;
         ChatGui.LogMessage -= OnLogMessage;

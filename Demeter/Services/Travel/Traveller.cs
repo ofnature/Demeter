@@ -308,12 +308,12 @@ public sealed class Traveller : ITravel
         {
             if (++_hops > MaxHops)
             {
-                Fail($"still not in territory {_territory} after {MaxHops} teleports and hops", TravelFailure.Route);
+                Fail($"still not in {Zones.Describe(_territory)} after {MaxHops} teleports and hops", TravelFailure.Route);
                 return Phase.None;
             }
             if (_world.RouteTo(_territory, _to) is not { } route)
             {
-                Fail($"territory {_territory} has no aetheryte this character has attuned, and no aethernet way in — attune one, or go there yourself",
+                Fail($"{Zones.Describe(_territory)} has no aetheryte this character has attuned, and no aethernet way in — attune one, or go there yourself",
                     TravelFailure.Route);
                 return Phase.None;
             }
@@ -321,13 +321,13 @@ public sealed class Traveller : ITravel
             if (route.AetheryteId is not { } aetheryte)
             {
                 // Already in the same city: the hop is the whole way in.
-                _world.Log($"Going to territory {_territory}: the aethernet to {_hop}.");
+                _world.Log($"Going to {Zones.Describe(_territory)}: the aethernet to {_hop}.");
                 return Phase.Aethernet;
             }
             _teleportTarget = aetheryte;
             _teleportTerritory = route.AetheryteTerritory;
             _hopFrom = _hop is null ? 0 : aetheryte;
-            _world.Log($"Going to territory {_territory}: teleporting to aetheryte {aetheryte}" + (_hop is null ? "." : $", then the aethernet to {_hop}."));
+            _world.Log($"Going to {Zones.Describe(_territory)}: teleporting to aetheryte {aetheryte}" + (_hop is null ? "." : $", then the aethernet to {_hop}."));
             return Phase.Teleport;
         }
 

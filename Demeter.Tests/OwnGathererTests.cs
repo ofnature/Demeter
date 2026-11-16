@@ -82,6 +82,106 @@ public class OwnGathererTests : IDisposable
     }
 
     [Fact]
+    public void The_zone_chosen_is_one_the_character_can_work_not_the_one_with_most_spots()
+    {
+        // Ice Crystal: Yak T'el has forty-seven spots and no aetheryte this character has; the
+        // North Shroud has fewer and is a teleport away.
+        var atlas = Atlas("""{ "31427": [ {"X":1,"Y":0,"Z":1}, {"X":2,"Y":0,"Z":2}, {"X":3,"Y":0,"Z":3} ], "30329": [ {"X":5,"Y":0,"Z":5} ] }""");
+        var source = new Source();
+        source.Points[9] = [new GatheringPointRef(31427, 1189, 0, 95), new GatheringPointRef(30329, 154, 0, 20)];
+        var log = new List<string>();
+        var world = new GatherWorldStub { TerritoryId = 129, CurrentClassJob = 34 };
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(new FakeTravelWorld())), source, atlas, log.Add)
+        {
+            Enabled = true,
+            Workable = t => t.TerritoryId != 1189,
+        };
+
+        Assert.Equal(154u, own.ZoneOf(9));
+        Assert.True(own.Start(9, 96, 0));
+        Assert.Contains(log, l => l.Contains("in territory 154"));
+    }
+
+    /// <summary>Ice Crystal in Coerthas Western Highlands (two spots, a mesh with no path) and the South Shroud.</summary>
+    private (OwnGatherer Own, GatherWorldStub World, FakeTravelWorld Fake, List<string> Log) NoWayInCoerthas(bool southShroudToo)
+    {
+        var atlas = Atlas("""{ "31310": [ {"X":500,"Y":0,"Z":500}, {"X":520,"Y":0,"Z":500} ], "30325": [ {"X":5,"Y":0,"Z":5} ] }""");
+        var source = new Source();
+        source.Points[9] = southShroudToo
+            ? [new GatheringPointRef(31310, 397, 0, 50), new GatheringPointRef(30325, 153, 0, 30)]
+            : [new GatheringPointRef(31310, 397, 0, 50)];
+        var log = new List<string>();
+        var world = new GatherWorldStub { TerritoryId = 397, CurrentClassJob = 16 };
+        var fake = new FakeTravelWorld { TerritoryId = 397 };
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(fake)), source, atlas, log.Add) { Enabled = true };
+        return (own, world, fake, log);
+    }
+
+    private static void TickWithNoPath(OwnGatherer own, GatherWorldStub world, FakeTravelWorld fake, Func<bool> until)
+    {
+        for (var i = 0; i < 400 && !until(); i++)
+        {
+            own.Tick();
+            if (fake.IsMoving) fake.FinishMove("no path (failed)");
+            world.UtcNow = world.UtcNow.AddSeconds(0.5);
+            fake.Advance(0.5);
+        }
+    }
+
+    [Fact]
+    public void A_zone_with_no_way_round_is_left_for_another_the_character_can_work()
+    {
+        var (own, world, fake, log) = NoWayInCoerthas(southShroudToo: true);
+        Assert.True(own.Start(9, 10, 0));
+        TickWithNoPath(own, world, fake, () => log.Any(l => l.Contains("instead")));
+
+        Assert.Contains(log, l => l.Contains("found no way to any of the 2 spots") && l.Contains("trying territory 153 instead"));
+        Assert.Contains(log, l => l.StartsWith("Gathering 10 × 9") && l.Contains("in territory 153"));
+        Assert.True(own.Busy);
+        Assert.Equal(153u, own.ZoneOf(9));   // and passed over for the rest of the session
+    }
+
+    [Fact]
+    public void A_zone_with_no_way_round_and_nowhere_else_still_stops_and_says_why()
+    {
+        var (own, world, fake, log) = NoWayInCoerthas(southShroudToo: false);
+        Assert.True(own.Start(9, 10, 0));
+        TickWithNoPath(own, world, fake, () => own.Faulted);
+
+        Assert.True(own.Faulted);
+        Assert.Contains("found no way to any of the 2 spots", own.Status);
+        Assert.DoesNotContain(log, l => l.Contains("instead"));
+    }
+
+    [Fact]
+    public void A_zone_is_named_in_the_log_when_the_name_is_known()
+    {
+        Zones.Name = id => id == 1189 ? "Yak T'el" : null;
+        try
+        {
+            Assert.Equal("territory 1189 (Yak T'el)", Zones.Describe(1189));
+            Assert.Equal("territory 153", Zones.Describe(153));
+        }
+        finally { Zones.Name = null; }
+    }
+
+    [Fact]
+    public void With_nowhere_workable_the_best_zone_is_still_chosen_so_the_run_can_say_why()
+    {
+        var atlas = Atlas("""{ "31427": [ {"X":1,"Y":0,"Z":1}, {"X":2,"Y":0,"Z":2} ], "30329": [ {"X":5,"Y":0,"Z":5} ] }""");
+        var source = new Source();
+        source.Points[9] = [new GatheringPointRef(31427, 1189, 0, 95), new GatheringPointRef(30329, 154, 0, 20)];
+        var world = new GatherWorldStub { TerritoryId = 129, CurrentClassJob = 34 };
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(new FakeTravelWorld())), source, atlas, _ => { })
+        {
+            Enabled = true,
+            Workable = _ => false,
+        };
+
+        Assert.Equal(1189u, own.ZoneOf(9));
+    }
+
+    [Fact]
     public void A_run_that_has_only_just_begun_reads_as_busy()
     {
         // It began in SwitchingJob, which an enumeration of "the busy states" missed — and a caller

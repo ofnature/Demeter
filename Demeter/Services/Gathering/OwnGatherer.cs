@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using Demeter.Services.Travel;
 using Demeter.Services.Gathering;
 
 namespace Demeter.Services.Gathering;
@@ -106,10 +108,36 @@ public sealed class OwnGatherer : IOwnGatherer
 
     public bool Enabled { get; set; }
 
+    /// <summary>
+    /// Whether this character can work a node now: high enough on its class, and a way into its
+    /// zone. Unset, every node is. Ice Crystal went to Yak T'el for its forty-seven spots, on a
+    /// character with no aetheryte there and a level short of its nodes, past zones it could reach.
+    /// </summary>
+    public Func<GatheringTarget, bool>? Workable { get; init; }
+
+    /// <summary>The node to go for: the best one this character can work, else the best there is — and the run says why not.</summary>
+    public GatheringTarget? Choose(uint itemId, uint territoryHint = 0, DateTime? now = null)
+        => Choose(GatheringPlan.All(itemId, _source, _atlas, territoryHint, now));
+
+    private GatheringTarget? Choose(IReadOnlyList<GatheringTarget> targets)
+    {
+        bool Ok(GatheringTarget t) => Workable?.Invoke(t) ?? true;
+        return targets.FirstOrDefault(t => Ok(t) && !_noWayIn.Contains(t.TerritoryId))
+               ?? targets.FirstOrDefault(Ok)
+               ?? targets.FirstOrDefault();
+    }
+
+    /// <summary>Zones Ariadne found no way around this session: passed over while another will do.</summary>
+    private readonly HashSet<uint> _noWayIn = [];
+
+    /// <summary>The run under way, to start again elsewhere if its zone has no way around.</summary>
+    private uint _item, _hint, _zone;
+    private int _count, _collectability;
+
     public bool CanGather(uint itemId, uint territoryHint = 0)
         => Enabled && GatheringPlan.For(itemId, _source, _atlas, territoryHint) is not null;
 
-    public uint? ZoneOf(uint itemId) => GatheringPlan.For(itemId, _source, _atlas)?.TerritoryId;
+    public uint? ZoneOf(uint itemId) => Choose(itemId)?.TerritoryId;
 
     public string Where(uint itemId) => _source.For(itemId)?.Describe() ?? string.Empty;
 
@@ -151,15 +179,31 @@ public sealed class OwnGatherer : IOwnGatherer
             return false;
         }
 
-        var first = targets[0];
+        var first = Choose(targets)!;
         var usable = targets.Where(t => t.TerritoryId == first.TerritoryId && t.ClassJobId == first.ClassJobId).ToList();
-        _log($"Gathering {count} × {itemId} at {collectability}+ in territory {first.TerritoryId} — " +
+        _log($"Gathering {count} × {itemId} at {collectability}+ in {Zones.Describe(first.TerritoryId)} — " +
              $"{usable.Count} node(s), {usable.Sum(t => t.Spawns.Count)} stop(s).");
+        (_item, _count, _collectability, _hint, _zone) = (itemId, count, collectability, territoryHint, first.TerritoryId);
         _runner.Begin(usable, count, collectability);
         return true;
     }
 
-    public void Tick() => _runner.Tick();
+    public void Tick()
+    {
+        _runner.Tick();
+
+        // A zone with no way to any spot (a broken mesh) is no reason to stop while the item grows
+        // somewhere else this character can go.
+        if (_runner.State != GatherRunState.Faulted || !_runner.NoWayInZone || _zone == 0)
+            return;
+        _noWayIn.Add(_zone);
+        _zone = 0;
+        var left = _count - _runner.Gathered;
+        if (left <= 0 || Choose(_item, _hint, DateTime.UtcNow) is not { } next || _noWayIn.Contains(next.TerritoryId))
+            return;   // nowhere else: the fault stands
+        _log($"{_runner.FailReason}; trying {Zones.Describe(next.TerritoryId)} instead.");
+        Start(_item, left, _collectability, _hint);
+    }
 
     /// <summary>
     /// Anything that is not finished. Written as the inverse on purpose: listing the busy states
