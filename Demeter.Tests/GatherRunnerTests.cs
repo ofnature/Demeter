@@ -445,6 +445,52 @@ public class GatherRunnerTests
     }
 
     [Fact]
+    public void Visits_that_fill_the_bag_do_not_count_toward_the_twice_round_limit()
+    {
+        // Cotton Boll, 186 of 400: twenty-five visits, twenty-three of them worked, and the run
+        // gave up as if it had found nothing twice round.
+        var here = new Vector3(10, 0, 10);
+        var target = Target(here, here);
+        var (runner, world) = Ready(target);
+        world.Integrity = 1;
+
+        runner.Begin(target, count: 10, minimumCollectability: 600);
+        var gone = 0;
+        for (var i = 0; i < 600 && runner.State is not (GatherRunState.Done or GatherRunState.Faulted); i++)
+        {
+            runner.Tick();
+            world.Advance(1.5);
+            if (world is { NodeOpen: false, Spawned.Count: 0 } && ++gone >= 4) { world.Spawned.Add(target.NodeId); world.Integrity = 1; gone = 0; }
+        }
+
+        Assert.True(runner.State == GatherRunState.Done, $"state={runner.State} fail='{runner.FailReason}'");
+        Assert.Equal(10, world.Held);
+    }
+
+    [Fact]
+    public void No_way_to_any_spot_is_said_plainly_after_one_lap()
+    {
+        // Coerthas Western Highlands on a broken mesh: "no path (failed)" to every point.
+        var target = Target(new Vector3(500, 0, 500), new Vector3(520, 0, 500), new Vector3(540, 0, 500));
+        var world = new World();
+        var fake = new FakeTravelWorld { TerritoryId = 1187 };
+        var runner = new GatherRunner(world, new Traveller(fake));
+        runner.Begin(target, count: 5, minimumCollectability: 0);
+        for (var i = 0; i < 400 && runner.State != GatherRunState.Faulted; i++)
+        {
+            runner.Tick();
+            if (fake.IsMoving) fake.FinishMove("no path (failed)");
+            world.Advance(0.5);
+            fake.Advance(0.5);
+        }
+
+        Assert.Equal(GatherRunState.Faulted, runner.State);
+        Assert.Contains("found no way to any of the 3 spots", runner.FailReason);
+        Assert.Contains("no path (failed)", runner.FailReason);
+        Assert.Equal(3, world.Log.Count(l => l.Contains("trying the next of 3")));
+    }
+
+    [Fact]
     public void Twice_round_every_spot_with_nothing_to_show_is_a_fault_not_a_loop()
     {
         var target = Target(new Vector3(10, 0, 10), new Vector3(20, 0, 20));

@@ -1,6 +1,11 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.2 — 2026-11-15
+
+- A long gather no longer stops part way with "worked all stops twice without filling the bag": only visits that add nothing count toward that limit, so a 400-count list keeps going while the nodes keep giving
+- When Ariadne finds no way to any of an item's spots in a zone, the run stops after one lap and says so (Ariadne's mesh for the zone, not the nodes) instead of trying every spot twice
+
 ## v0.1.1 — 2026-11-15
 
 - A log button in the main window's top row opens demeter.log's folder with the file selected, ready to send

@@ -203,6 +203,13 @@ public sealed class GatherRunner
     private int _collectability;
     private int _spawn;
     private int _visited;
+
+    /// <summary>The bag at the last spot left: a visit that added to it is progress, not a lap.</summary>
+    private int _heldAtLastSpot;
+
+    /// <summary>Spots in a row Ariadne found no way to, and what it last said.</summary>
+    private int _unreachableRun;
+    private string _lastUnreachable = string.Empty;
     private DateTime _phaseStart;
     private DateTime _lastAction;
     private bool _scrutinyUsed;
@@ -304,6 +311,8 @@ public sealed class GatherRunner
         _spawn = 0;
         _visited = 0;
         _baseline = _world.CollectableCount(target.ItemId, minimumCollectability);
+        _heldAtLastSpot = _baseline;
+        _unreachableRun = 0;
         _scrutinyUsed = false;
         _currentNode = target.NodeId;
         _travelTo = default;
@@ -493,7 +502,7 @@ public sealed class GatherRunner
             }
 
             if (_travel.Tick() == TravelStatus.Failed)
-                NextSpot($"node {live.NodeId} could not be reached ({_travel.FailReason})");
+                NextSpot($"node {live.NodeId} could not be reached ({_travel.FailReason})", unreachable: _travel.FailReason);
             else if (_world.UtcNow - _phaseStart > MoveWait)
                 NextSpot($"node {live.NodeId} took too long to reach");
             return;
@@ -520,7 +529,7 @@ public sealed class GatherRunner
 
         if (_travel.Tick() == TravelStatus.Failed)
         {
-            NextSpot($"could not be reached ({_travel.FailReason})");
+            NextSpot($"could not be reached ({_travel.FailReason})", unreachable: _travel.FailReason);
             return;
         }
 
@@ -854,7 +863,7 @@ public sealed class GatherRunner
     }
 
     /// <summary>Nodes move as they are worked, so the next spot is expected, not a failure.</summary>
-    private void NextSpot(string why)
+    private void NextSpot(string why, string? unreachable = null)
     {
         if (_stopAfterNode)
         {
@@ -867,8 +876,34 @@ public sealed class GatherRunner
         var was = _stops[_spawn % _stops.Count];
         var index = _spawn % _stops.Count + 1;
         _spawn++;
+
+        // The twice-round limit is for laps that find nothing. A visit that filled the bag some
+        // is progress: four hundred Cotton Boll is more than two laps of twelve nodes, and
+        // counting every visit gave up at 186 with the nodes still giving.
+        var held = _world.CollectableCount(_itemId, _collectability);
+        if (!_timedOnly && held > _heldAtLastSpot)
+            _visited = 0;
+        _heldAtLastSpot = held;
         _visited++;
         _world.Log($"Node {was.NodeId}, stop {index}: {why}; trying the next of {_stops.Count}.");
+
+        // Every spot in a row with no way there: the zone's mesh, not the nodes. Said once,
+        // after one lap, rather than as "worked twice without filling the bag".
+        if (unreachable is null)
+        {
+            _unreachableRun = 0;
+        }
+        else
+        {
+            _unreachableRun++;
+            _lastUnreachable = unreachable;
+            if (_unreachableRun >= _stops.Count)
+            {
+                Fault($"Ariadne found no way to any of the {_stops.Count} spots for item {_itemId} in territory {_target!.TerritoryId} " +
+                      $"(last: {_lastUnreachable}) — the problem is Ariadne's mesh for this zone, not the nodes");
+                return;
+            }
+        }
 
         // A timed node is one node at one of its spots, and it does not come back once worked: after
         // looking at each spot once, walking the circuit again only chains the same empty spots.
