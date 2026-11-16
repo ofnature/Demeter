@@ -44,7 +44,11 @@ public class GatherRunnerTests
         public TimeSpan WindowDelay { get; set; } = TimeSpan.Zero;
         private DateTime _openedAt;
         // A plain node's list hides while each gather plays, as the real one does.
-        public bool ItemListOpen => NodeOpen && UtcNow - _openedAt >= WindowDelay && !(PlainNode && ExecutingAction);
+        public bool ItemListOpen => NodeOpen && !ShutsAtOnce && UtcNow - _openedAt >= WindowDelay && !(PlainNode && ExecutingAction);
+
+        /// <summary>The game begins gathering, then shuts it before any list shows, and the node stays up.</summary>
+        public bool ShutsAtOnce { get; set; }
+        private int _shutIn;
         // A plain gather's action outlasts the press by a tick, as the real one outlasts it by frames.
         private int _actionLeft;
         private bool _actionForced;
@@ -103,6 +107,7 @@ public class GatherRunnerTests
             if (OpensAt is { } real && Vector3.Distance(real, PlayerPosition) > 5f) return false;
             NodeOpen = true;
             _openedAt = UtcNow;
+            if (ShutsAtOnce) { _shutIn = 2; return true; }
             // Only once the list has had time to appear, as the real one does.
             if (!PlainNode && WindowDelay == TimeSpan.Zero)
                 Collectable = new CollectableState(0, 600, Integrity, 800, false, 0, ScourYield, MeticulousYield);
@@ -183,6 +188,7 @@ public class GatherRunnerTests
         {
             UtcNow = UtcNow.AddSeconds(seconds);
             if (_actionLeft > 0) _actionLeft--;
+            if (_shutIn > 0 && --_shutIn == 0) NodeOpen = false;   // up for a tick, as the game's flag is
         }
     }
 
@@ -355,6 +361,52 @@ public class GatherRunnerTests
         fake.IsInFlight = false; fake.IsMounted = false;
         for (var i = 0; i < 6 && runner.State == GatherRunState.Walking; i++) { runner.Tick(); world.Advance(0.5); fake.Advance(0.5); }
         Assert.NotEqual(GatherRunState.Walking, runner.State);
+    }
+
+    [Fact]
+    public void A_node_that_shuts_before_its_window_shows_is_walked_right_up_to()
+    {
+        // Lightning Crystal, node 30089: opened from 3.2y, shut, "came back (Revisit)", opened
+        // again from the same spot, once a second.
+        var node = new Vector3(10, 0, 10);
+        var target = Target(node);
+        var (_, world) = Ready(target);
+        var fake = new FakeTravelWorld { TerritoryId = 1187 };
+        var runner = new GatherRunner(world, new Traveller(fake));
+        world.PlayerPosition = fake.PlayerPosition = new Vector3(10, 0, 13.2f);
+        world.NodeAt[target.NodeId] = node;
+        world.ShutsAtOnce = true;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 20 && fake.LastMoveTarget is null; i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(1, world.Interacts);
+        Assert.Equal(node, fake.LastMoveTarget);
+        Assert.Contains(world.Log, l => l.Contains("closing in"));
+        Assert.DoesNotContain(world.Log, l => l.Contains("came back"));
+
+        // There: the game lets it be gathered.
+        world.ShutsAtOnce = false;
+        world.PlayerPosition = fake.PlayerPosition = node;
+        fake.FinishMove("goal reached", node);
+        for (var i = 0; i < 20 && runner.State is not (GatherRunState.Working or GatherRunState.Faulted); i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Working, runner.State);
+        Assert.Equal(2, world.Interacts);
+    }
+
+    [Fact]
+    public void A_node_that_shuts_even_close_up_is_left_for_a_while()
+    {
+        var here = new Vector3(10, 0, 10);
+        var target = Target(here);
+        var (runner, world) = Ready(target);
+        world.ShutsAtOnce = true;
+        runner.Begin(target, count: 5, minimumCollectability: 0);
+        for (var i = 0; i < 60; i++) { runner.Tick(); world.Advance(1.5); }   // 90 seconds
+
+        Assert.Equal(2, world.Interacts);
+        Assert.DoesNotContain(world.Log, l => l.Contains("came back"));
+        Assert.Contains(world.Log, l => l.Contains("even close up — left for 2 minutes"));
     }
 
     [Fact]

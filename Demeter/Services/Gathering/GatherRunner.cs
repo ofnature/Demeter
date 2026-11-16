@@ -167,6 +167,18 @@ public sealed class GatherRunner
     private static readonly TimeSpan RevisitOpenWait = TimeSpan.FromSeconds(4);
     private DateTime _spentAt;
     private bool _revisit;
+
+    /// <summary>
+    /// A node the game opens and shuts again before its list shows is not spent, and is not back
+    /// from a Revisit: the game began the gather and then refused it as out of reach, though within
+    /// <see cref="Traveller.InteractReach"/>. Walked right up to and asked once more; refused again,
+    /// it is left a while.
+    /// </summary>
+    private const float CloseReach = Traveller.PointStop + Traveller.ArrivalSlack;
+    private static readonly TimeSpan LeaveRefusingNode = TimeSpan.FromMinutes(2);
+    private bool _windowSeen;
+    private uint _closeInNode;
+    private readonly Dictionary<uint, DateTime> _leftUntil = new();
     private bool _plainPressed;
     private bool _plainPressTook;
 
@@ -293,6 +305,8 @@ public sealed class GatherRunner
         _stops.Clear();
         _nodeIds.Clear();
         _setAside.Clear();
+        _leftUntil.Clear();
+        _closeInNode = 0;
         foreach (var t in targets)
         {
             if (t.TerritoryId != target.TerritoryId || t.ClassJobId != target.ClassJobId)
@@ -463,13 +477,17 @@ public sealed class GatherRunner
         // What is actually up, of everything that yields this item. Any live node beats every
         // recorded coordinate: the coordinates only say where nodes *can* be, and most of them are
         // not there at any given moment.
-        var looking = _setAside.Count == 0 ? _nodeIds : System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(_nodeIds, id => !_setAside.Contains(id)));
-        if (_world.NearestLiveNode(looking) is { } live)
+        // An empty list asks for any node at all, so with every node left out there is no asking.
+        var looking = _setAside.Count == 0 && _leftUntil.Count == 0
+            ? _nodeIds
+            : System.Linq.Enumerable.ToList(System.Linq.Enumerable.Where(_nodeIds, id => !_setAside.Contains(id)
+                && !(_leftUntil.TryGetValue(id, out var until) && _world.UtcNow < until)));
+        if (looking.Count > 0 && _world.NearestLiveNode(looking) is { } live)
         {
             _currentNode = live.NodeId;
             Status = $"Node {live.NodeId}, {live.Distance:F0}y away";
 
-            if (live.Distance <= Traveller.InteractReach)
+            if (live.Distance <= (live.NodeId == _closeInNode ? CloseReach : Traveller.InteractReach))
             {
                 // Reached in the air: the executor is landing — with its blocked-descent reroute —
                 // and cancelling it here left a bare dismount press against a descent that never
@@ -662,6 +680,14 @@ public sealed class GatherRunner
                 return;
             }
 
+            // Opened and shut with no list ever showing: the game refused it. Taking that for a
+            // Revisit re-asked it every second from the same spot, for eight minutes on one node.
+            if (!_windowSeen)
+            {
+                ShutBeforeItsWindow();
+                return;
+            }
+
             // Revisit — the trait that refreshes a depleted node in place. The window shuts
             // either way, so the node gets a moment to come back before the walk to the next
             // spot: live and within reach again means work it again.
@@ -677,6 +703,7 @@ public sealed class GatherRunner
                 _spentAt = default;
                 _revisit = true;
                 _fromShort = false;
+                _windowSeen = false;
                 _opens = 0;
                 _stoppedAt = default;
                 _slotChosenAt = default;
@@ -692,6 +719,12 @@ public sealed class GatherRunner
             _spentAt = default;
             NextSpot("spent");
             return;
+        }
+
+        if (!_windowSeen && (_world.ItemListOpen || _world.ExecutingAction || _world.Collectable is not null))
+        {
+            _windowSeen = true;
+            _closeInNode = 0;
         }
 
         // An action playing is the node's business, whatever the list is doing meanwhile — on a
@@ -930,10 +963,35 @@ public sealed class GatherRunner
     /// </summary>
     private void Walk(Vector3 to, uint territory) => _travel.Begin(territory, to, fly: true, land: true);
 
+    private void ShutBeforeItsWindow()
+    {
+        var away = _world.DistanceToDataId(_currentNode);
+        var level = _world.PositionOfDataId(_currentNode) is { } at ? $", {Math.Abs(at.Y - _world.PlayerPosition.Y):F1}y vertically" : string.Empty;
+        var where = $"{(away is { } d ? $"{d:F1}y away" : "not in the object table")}{level}";
+
+        if (!_fromShort && _closeInNode != _currentNode)
+        {
+            _world.Log($"Node {_currentNode} shut before its window showed ({where}) — not near enough for the game; closing in.");
+            _closeInNode = _currentNode;
+            _travel.Cancel();
+            Enter(GatherRunState.Walking);
+            return;
+        }
+
+        if (_fromShort)
+            _setAside.Add(_currentNode);
+        else
+            _leftUntil[_currentNode] = _world.UtcNow + LeaveRefusingNode;
+        _closeInNode = 0;
+        NextSpot($"opened and shut before its window showed ({where}) " +
+                 (_fromShort ? "from as near as Ariadne goes — set aside for this run" : $"even close up — left for {LeaveRefusingNode.TotalMinutes:F0} minutes"));
+    }
+
     private void BeginOpening(bool fromShort)
     {
         _travel.Cancel();
         _fromShort = fromShort;
+        _windowSeen = false;
         _opens = 0;
         _stoppedAt = default;
         _slotChosenAt = default;

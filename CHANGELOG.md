@@ -1,6 +1,10 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.3 — 2026-11-15
+
+- A node the game opens and shuts again at once (stood just too far for it) is no longer taken for a Revisit and asked again every second: Demeter walks right up to it and asks once more, and if it still shuts, leaves it two minutes and goes on to the next
+
 ## v0.1.2 — 2026-11-15
 
 - A long gather no longer stops part way with "worked all stops twice without filling the bag": only visits that add nothing count toward that limit, so a 400-count list keeps going while the nodes keep giving
