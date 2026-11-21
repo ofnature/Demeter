@@ -23,7 +23,8 @@ public sealed record MainWindowDeps(
     Action ToggleLists,
     Action? OpenDebug,
     Action StopAll,
-    Action ShowLog);
+    Action ShowLog,
+    OceanPanel Ocean);
 
 /// <summary>
 /// The main window: what Demeter is doing and for whom, a Stop, the way to the gather lists, and
@@ -40,7 +41,7 @@ public sealed class MainWindow : DemeterWindow
     public MainWindow(MainWindowDeps deps) : base("Demeter###DemeterMain")
     {
         _d = deps;
-        Size = new Vector2(340, 320);
+        Size = new Vector2(500, 360);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(280, 140), MaximumSize = new Vector2(700, 1000) };
     }
@@ -77,18 +78,49 @@ public sealed class MainWindow : DemeterWindow
         try
         {
             DrawTopRow();
-            DemeterTheme.BeginCard("hero");
-            DrawStatus();
-            DrawControls();
-            DemeterTheme.EndCard();
-            DrawDependencies();
-            DrawAbilities();
-            DrawSettings();
+
+            // Modes down the left, the chosen one beside them.
+            if (ImGui.BeginChild("##modes", new Vector2(130f * Dalamud.Interface.Utility.ImGuiHelpers.GlobalScale, 0), false))
+            {
+                if (SidebarTab.Draw("Gathering", FontAwesomeIcon.Leaf, Cfg.Mode == DemeterMode.Gathering))
+                    SetMode(DemeterMode.Gathering);
+                if (SidebarTab.Draw("Ocean Fishing", FontAwesomeIcon.Ship, Cfg.Mode == DemeterMode.OceanFishing))
+                    SetMode(DemeterMode.OceanFishing);
+            }
+            ImGui.EndChild();
+            ImGui.SameLine();
+            if (ImGui.BeginChild("##mode", Vector2.Zero, false))
+            {
+                if (Cfg.Mode == DemeterMode.OceanFishing)
+                    _d.Ocean.Draw();
+                else
+                    DrawGathering();
+            }
+            ImGui.EndChild();
         }
         finally
         {
             ImGui.PopStyleVar();
         }
+    }
+
+    private void SetMode(DemeterMode mode)
+    {
+        if (Cfg.Mode == mode)
+            return;
+        Cfg.Mode = mode;
+        _d.SaveConfig();
+    }
+
+    private void DrawGathering()
+    {
+        DemeterTheme.BeginCard("hero");
+        DrawStatus();
+        DrawControls();
+        DemeterTheme.EndCard();
+        DrawDependencies();
+        DrawAbilities();
+        DrawSettings();
     }
 
     private void DrawTopRow()

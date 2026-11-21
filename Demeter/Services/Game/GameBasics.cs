@@ -244,6 +244,33 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityStat
         }
     }
 
+    /// <summary>Whether the character has attuned this aetheryte; false when it cannot be read.</summary>
+    public bool IsAttuned(uint aetheryteId)
+    {
+        try
+        {
+            var state = UIState.Instance();
+            return state != null && state->IsAetheryteUnlocked(aetheryteId);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Whether a quest is done; false when it cannot be read.</summary>
+    public bool IsQuestComplete(uint questId)
+    {
+        try
+        {
+            return QuestManager.IsQuestComplete(questId);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// The first of these the character has attuned. When the unlock state cannot be read at all the
     /// first candidate is taken and Lifestream gets to be the one that says no — better than calling

@@ -42,6 +42,13 @@ public sealed class GatherListsWindow : DemeterWindow
         SizeConstraints = new WindowSizeConstraints { MinimumSize = new Vector2(420, 220), MaximumSize = new Vector2(1000, 1200) };
     }
 
+    /// <summary>The list on screen — the "current" list the right-click menus add to.</summary>
+    public int SelectedIndex
+    {
+        get => Math.Clamp(_gatherListIndex, 0, Math.Max(0, _config.GatherLists.Count - 1));
+        set => _gatherListIndex = value;
+    }
+
     public override void Draw()
     {
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
@@ -93,6 +100,7 @@ public sealed class GatherListsWindow : DemeterWindow
         }
 
         if (_gatherListIndex >= lists.Count) _gatherListIndex = lists.Count - 1;
+        if (_gatherListIndex < 0) _gatherListIndex = 0;
         var list = lists[_gatherListIndex];
 
         ImGui.SetNextItemWidth(150f);

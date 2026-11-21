@@ -38,6 +38,15 @@ public sealed class DemeterConfig : IPluginConfiguration
     /// <summary>Where a finished gather run takes you.</summary>
     public GatherHome GatherHome { get; set; } = GatherHome.Stay;
 
+    /// <summary>Which of the main window's modes is showing.</summary>
+    public DemeterMode Mode { get; set; } = DemeterMode.Gathering;
+
+    /// <summary>The ocean fishing boat to sign up for. Ruby is only offered once Kugane is open.</summary>
+    public Services.Fishing.Ocean.OceanRoute OceanRoute { get; set; } = Services.Fishing.Ocean.OceanRoute.Indigo;
+
+    /// <summary>Where a finished voyage takes you.</summary>
+    public GatherHome OceanHome { get; set; } = GatherHome.Stay;
+
     /// <summary>Repair gear during a gather run once the worst piece is at or under this percent; 0 never repairs.</summary>
     public int RepairAtPercent { get; set; } = 30;
 
@@ -58,4 +67,11 @@ public sealed class DemeterConfig : IPluginConfiguration
 
     /// <summary>Where along the edge, 0..1.</summary>
     public float EdgeTabAlong { get; set; } = 0.5f;
+}
+
+/// <summary>The main window's modes, listed down its left side.</summary>
+public enum DemeterMode
+{
+    Gathering = 0,
+    OceanFishing = 1,
 }

@@ -48,6 +48,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly DemeterIpc _ipc = null!;
     private readonly MainWindow _mainWindow = null!;
     private readonly GatherListsWindow _listsWindow = null!;
+    private readonly ItemContextMenu _itemMenu = null!;
     private readonly DebugWindow? _debugWindow;
     private readonly FishWindow _fishWindow = null!;
     private readonly HoleApproach _approach = null!;
@@ -61,6 +62,13 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
+
+    /// <summary>
+    /// Return asks "Return to your home point?" before it goes. Demeter pressed it, so Demeter says
+    /// Yes, while the window comes up within a few seconds of the press (Orion's way).
+    /// </summary>
+    private DateTime? _confirmReturnUntil;
+    private static readonly TimeSpan ReturnConfirmWindow = TimeSpan.FromSeconds(8);
 
     public DemeterPlugin(IDalamudPluginInterface pluginInterface)
     {
@@ -179,6 +187,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
 
             _listsWindow = new GatherListsWindow(_config, SaveConfig, _lists, gatherables, _gatherer, _game.ItemCount,
                 () => _items.IsRunning || FishingBusy);
+            _itemMenu = new ItemContextMenu(ContextMenu, _config, SaveConfig, gatherables, _listsWindow, message => Say(message));
 #if DEBUG
             _debugWindow = new DebugWindow(nodes, gatherWorld);
 #endif
@@ -186,7 +195,10 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _config, SaveConfig, _lists, _gateway, _items, _gatherer, gatherables.NameOf, abilities, _game.LevelOfJob,
                 PluginLoaded, ToggleLists,
                 _debugWindow is null ? null : () => _debugWindow.IsOpen = true,
-                StopAll, ShowLogFile));
+                StopAll, ShowLogFile,
+                new OceanPanel(new OceanPanelDeps(_config, SaveConfig, new GameOceanVoyage(DataManager),
+                    () => _game.IsAttuned(KuganeAetheryte), () => _game.IsQuestComplete(OceanPanel.UnlockQuest),
+                    () => _game.LevelOfJob(GatherReadiness.Fisher)))));
 
             _ipc = new DemeterIpc(PluginInterface, IsBusy, RequestStopAfterRun, _gateway, _items, _fishGate, ToggleLists);
 
@@ -279,6 +291,9 @@ public sealed class DemeterPlugin : IDalamudPlugin
         }
     }
 
+    /// <summary>Kugane's aetheryte: attuned, the Ruby route is the character's to choose.</summary>
+    private const uint KuganeAetheryte = 111;
+
     /// <summary>Explorer at demeter.log, selected, ready to be dragged into a message.</summary>
     private void ShowLogFile()
     {
@@ -313,6 +328,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
         try { StopAll(); } catch { }
         _windowSystem.RemoveAllWindows();
         _ipc?.Dispose();
+        _itemMenu?.Dispose();
         _fisherWorld?.Dispose();
         try { _dockLayout?.Dispose(); } catch { }
         _ownLog?.Dispose();
@@ -455,6 +471,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
         // The catch report is heard only while a fishing run is going, whoever runs it.
         _fisherWorld.Listening = _fishing.Busy || _session.Busy;
         _gp.Observe(DateTime.UtcNow, _fisherWorld.Gp, _fisherWorld.MaxGp);
+        ConfirmReturn();
 #if DEBUG
         // A Debug build records what each fish scores and how long it was, for the release to ship.
         if (_scores.Dirty)
@@ -537,11 +554,29 @@ public sealed class DemeterPlugin : IDalamudPlugin
             _homeCommand = null;
             Say($"Gather lists: heading home ({goHome}).");
             _game.SendChatCommand(goHome);
+            if (goHome == GatherHomeCommands.For(GatherHome.Return))
+                _confirmReturnUntil = DateTime.UtcNow + ReturnConfirmWindow;
         }
+    }
+
+    private void ConfirmReturn()
+    {
+        if (_confirmReturnUntil is not { } until)
+            return;
+        if (DateTime.UtcNow > until)
+        {
+            _confirmReturnUntil = null;
+            return;
+        }
+        if (!_game.IsAddonVisible("SelectYesno"))
+            return;
+        _game.SelectYesNo(true);
+        _confirmReturnUntil = null;
     }
 
     private void StopAll()
     {
+        _confirmReturnUntil = null;
         if (_session.Busy)
             _session.Cancel();
         _stand.Cancel();

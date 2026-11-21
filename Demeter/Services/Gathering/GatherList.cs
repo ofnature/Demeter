@@ -24,4 +24,13 @@ public sealed class GatherList
     public bool RemoveCompleted { get; set; }
 
     public List<GatherListItem> Items { get; set; } = [];
+
+    /// <summary>Put an item on the list at the default target. False when it is already there.</summary>
+    public bool Add(uint itemId)
+    {
+        if (Items.Exists(i => i.ItemId == itemId))
+            return false;
+        Items.Add(new GatherListItem { ItemId = itemId });
+        return true;
+    }
 }

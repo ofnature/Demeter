@@ -1,6 +1,13 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.5 — 2026-11-21
+
+- Right-clicking a gatherable item in the inventory or the crafting log (a recipe's result or one of its materials) offers "Add to Demeter: (the list on screen)" and "Add to new Demeter list", which makes a list named after the item. The Gather lists window opens on the list changed. Items no node or fishing hole gives are not offered
+- The main window has a list of modes down its left side: Gathering, as it was, and Ocean Fishing
+- Ocean Fishing, first part: the panel counts down to the next sign-up and says when the boat leaves in your time, keeps the route (Indigo from Limsa; Ruby from Kugane once its aetheryte is attuned) and where to go afterwards, and shows the voyage under way: route, stop, what the boat is doing, and the spectral current. It says when Fisher or the quest "All the Fish in the Sea" is missing. Signing up and fishing the voyage are not in yet
+- "Return" as the Afterwards choice now answers the game's "Return to your home point?" itself, instead of leaving the window up. Stop cancels it
+
 ## v0.1.4 — 2026-11-15
 
 - An item is gathered in a zone this character can work: high enough for its nodes, with an aetheryte attuned to get there. Ice Crystal went to Yak T'el for its many spots, on a level 50 character with no way in, instead of the South Shroud

@@ -68,6 +68,8 @@ public sealed class GatherableIndex
 
     public int Count => _items.Count;
 
+    public bool Contains(uint itemId) => _names.ContainsKey(itemId);
+
     public string NameOf(uint itemId) => _names.TryGetValue(itemId, out var name) ? name : $"item {itemId}";
 
     /// <summary>
