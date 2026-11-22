@@ -1,6 +1,10 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.7 — 2026-11-22
+
+- The Gather lists window can be minimized to an edge tab of its own, beside Demeter's: point at it to pop the lists out, click to pin, drag it to any edge, right-click to get the window back. Each tab keeps its own spot. "Add to Demeter" from a right-click menu leaves the lists in the tab when they live there
+
 ## v0.1.6 — 2026-11-22
 
 - Timed nodes are farmed window after window until the target is reached: only windows in a row that give nothing count toward giving up, where every window counted and the run stopped after the third

@@ -209,21 +209,31 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 _windowSystem.AddWindow(_debugWindow);
 
             // Minimized, the main window is a tab on the screen edge, stacked with Daedalus's (10),
-            // Charon's (20) and Odysseus's (30). Any edge, any spot along it.
+            // Charon's (20) and Odysseus's (30). Any edge, any spot along it. The gather lists can be
+            // a tab of their own beside it.
             _dockLayout = new Windows.Dock.DockLayoutShare(PluginInterface, "Demeter", order: 40);
             _windowSystem.AddWindow(new Windows.Dock.EdgeDockWindow(
             [
-                new Windows.Dock.EdgeDockWindow.Tab("main", "Demeter", () => true, _mainWindow.DrawDocked, 360f, OpenMain),
+                new Windows.Dock.EdgeDockWindow.Tab("main", "Demeter", () => _config.MinimizedToTab, _mainWindow.DrawDocked, 360f, OpenMain),
+                new Windows.Dock.EdgeDockWindow.Tab("lists", "Gather lists", () => _config.ListsMinimizedToTab, _listsWindow.DrawDocked, 560f, _listsWindow.Restore),
             ],
-                _ => (_config.EdgeTabEdge, _config.EdgeTabAlong),
-                (_, edge, along) =>
+                id => id == "lists" ? (_config.ListsTabEdge, _config.ListsTabAlong) : (_config.EdgeTabEdge, _config.EdgeTabAlong),
+                (id, edge, along) =>
                 {
-                    _config.EdgeTabEdge = edge;
-                    _config.EdgeTabAlong = along;
+                    if (id == "lists")
+                    {
+                        _config.ListsTabEdge = edge;
+                        _config.ListsTabAlong = along;
+                    }
+                    else
+                    {
+                        _config.EdgeTabEdge = edge;
+                        _config.EdgeTabAlong = along;
+                    }
                     SaveConfig();
                 },
                 _dockLayout,
-                () => _config.MinimizedToTab && ClientState.IsLoggedIn));
+                () => (_config.MinimizedToTab || _config.ListsMinimizedToTab) && ClientState.IsLoggedIn));
 
             PluginInterface.UiBuilder.Draw += _windowSystem.Draw;
             PluginInterface.UiBuilder.OpenMainUi += OpenMain;
@@ -596,7 +606,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
         {
             case "lists":
             case "gather":
-                _listsWindow.IsOpen = true;
+                _listsWindow.Restore();
                 break;
             case "fish":
                 _fishWindow.IsOpen = true;
@@ -616,7 +626,14 @@ public sealed class DemeterPlugin : IDalamudPlugin
         }
     }
 
-    private void ToggleLists() => _listsWindow.IsOpen = !_listsWindow.IsOpen;
+    /// <summary>The lists window open or shut; from the edge tab, back to the window.</summary>
+    private void ToggleLists()
+    {
+        if (_config.ListsMinimizedToTab)
+            _listsWindow.Restore();
+        else
+            _listsWindow.IsOpen = !_listsWindow.IsOpen;
+    }
 
     private static bool PluginLoaded(string internalName)
     {

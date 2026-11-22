@@ -26,6 +26,9 @@ public sealed class GatherListsWindow : DemeterWindow
     private int _gatherListIndex;
     private string _gatherFilter = string.Empty;
 
+    /// <summary>Drawing inside the edge tab's pop-out rather than as the window.</summary>
+    private bool _inDock;
+
     public GatherListsWindow(DemeterConfig config, Action save, GatherListRunner runner, GatherableIndex gatherables,
         IOwnGatherer gatherer, Func<uint, int> itemCount, Func<bool> runActive)
         : base("Demeter Gather lists##DemeterGather")
@@ -49,11 +52,52 @@ public sealed class GatherListsWindow : DemeterWindow
         set => _gatherListIndex = value;
     }
 
+    /// <summary>The window's body, drawn in the edge tab's pop-out.</summary>
+    public void DrawDocked()
+    {
+        _inDock = true;
+        try { Draw(); }
+        finally { _inDock = false; }
+    }
+
+    /// <summary>
+    /// Show the lists: the window, unless they live in the edge tab — there the tab is already up,
+    /// and opening the window as well would show them twice.
+    /// </summary>
+    public void Reveal()
+    {
+        if (!_config.ListsMinimizedToTab)
+            IsOpen = true;
+    }
+
+    /// <summary>Back to the window, out of the edge tab.</summary>
+    public void Restore()
+    {
+        if (_config.ListsMinimizedToTab)
+        {
+            _config.ListsMinimizedToTab = false;
+            _save();
+        }
+        IsOpen = true;
+    }
+
     public override void Draw()
     {
         ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 5f);
         try { DrawGatherLists(); }
         finally { ImGui.PopStyleVar(); }
+    }
+
+    /// <summary>Minimize to the edge tab, or back to the window from it.</summary>
+    private void DrawDockButton()
+    {
+        ImGui.SameLine();
+        var label = _inDock ? "Restore window" : "Minimize to edge tab";
+        if (!DemeterTheme.IconButton("listsdock", _inDock ? FontAwesomeIcon.WindowRestore : FontAwesomeIcon.WindowMinimize, label))
+            return;
+        _config.ListsMinimizedToTab = !_inDock;
+        IsOpen = _inDock;
+        _save();
     }
 
     /// <summary>
@@ -96,6 +140,7 @@ public sealed class GatherListsWindow : DemeterWindow
             if (ImGui.SmallButton("+ New list")) { lists.Add(new GatherList()); _save(); }
             ImGui.SameLine();
             DrawPresetButton(lists);
+            DrawDockButton();
             return;
         }
 
@@ -116,6 +161,7 @@ public sealed class GatherListsWindow : DemeterWindow
         if (DrawPresetButton(lists)) return;
         ImGui.SameLine();
         if (ImGui.SmallButton("Delete")) { lists.RemoveAt(_gatherListIndex); _save(); return; }
+        DrawDockButton();
 
         var name = list.Name;
         ImGui.SetNextItemWidth(150f);

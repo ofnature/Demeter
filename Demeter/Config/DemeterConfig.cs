@@ -67,6 +67,14 @@ public sealed class DemeterConfig : IPluginConfiguration
 
     /// <summary>Where along the edge, 0..1.</summary>
     public float EdgeTabAlong { get; set; } = 0.5f;
+
+    /// <summary>The gather lists live as a tab of their own on the screen edge instead of a window.</summary>
+    public bool ListsMinimizedToTab { get; set; }
+
+    public Windows.Dock.DockEdge ListsTabEdge { get; set; } = Windows.Dock.DockEdge.Left;
+
+    /// <summary>Where along the edge, 0..1.</summary>
+    public float ListsTabAlong { get; set; } = 0.7f;
 }
 
 /// <summary>The main window's modes, listed down its left side.</summary>

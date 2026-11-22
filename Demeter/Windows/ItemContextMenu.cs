@@ -107,6 +107,6 @@ public sealed class ItemContextMenu : IDisposable
     private void Show(GatherList list)
     {
         _listsWindow.SelectedIndex = _config.GatherLists.IndexOf(list);
-        _listsWindow.IsOpen = true;
+        _listsWindow.Reveal();
     }
 }
