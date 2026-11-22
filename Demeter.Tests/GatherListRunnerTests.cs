@@ -171,6 +171,22 @@ public class GatherListRunnerTests
     }
 
     [Fact]
+    public void A_timed_item_is_farmed_window_after_window_while_each_one_gives_something()
+    {
+        // Farming a cluster to 99: every window adds a few, and the three-window limit — meant for
+        // windows that give nothing — ended the run after the third.
+        var (runner, own, _) = Make();
+        own.UpAt[7763] = own.Now;
+        own.WindowCloses.Add(7763);                                    // one per window
+
+        Assert.True(runner.Begin([List("topsoil", (7763, 6))]));
+        Run(runner, 60);
+        Assert.Equal(6, own.Bag[7763]);
+        Assert.Equal(6, own.Starts.Count);
+        Assert.True(Assert.Single(runner.Outcomes).Reached);
+    }
+
+    [Fact]
     public void A_timed_item_that_never_fills_is_given_up_after_three_windows()
     {
         var (runner, own, _) = Make();

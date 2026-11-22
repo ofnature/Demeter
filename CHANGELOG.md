@@ -1,6 +1,14 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.6 — 2026-11-22
+
+- Timed nodes are farmed window after window until the target is reached: only windows in a row that give nothing count toward giving up, where every window counted and the run stopped after the third
+- An item only timed nodes give is waited for in its real windows. Leftover rows in the game data with no zone added windows of their own, so Coerthan Tea Leaves, the clusters, Adamantite Ore, Old World Fig and Chysahl Greens were gone for when no node was up, found nowhere, and skipped
+- Truth of Forests or Truth of Mountains is put on before a gather sets off, when it is learned and off (changing class takes it off): without it a timed node never shows. If it will not go on, the log says so and the gather carries on
+- A timed node is worked with Blessed Harvest II or King's Yield II (or the first rank, as GP and levels allow), once a node, before its first gather
+- Shards, crystals and clusters are gathered with The Twelve's Bounty on every gather the GP pays for, and The Giving Land whenever its recast is up (level 74); the two stack
+
 ## v0.1.5 — 2026-11-21
 
 - Right-clicking a gatherable item in the inventory or the crafting log (a recipe's result or one of its materials) offers "Add to Demeter: (the list on screen)" and "Add to new Demeter list", which makes a list named after the item. The Gather lists window opens on the list changed. Items no node or fishing hole gives are not offered

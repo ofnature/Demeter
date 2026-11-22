@@ -66,6 +66,22 @@ public class GatheringPlanTests : IDisposable
     }
 
     [Fact]
+    public void A_timed_point_the_sheet_does_not_place_adds_no_window_to_wait_for()
+    {
+        // Coerthan Tea Leaves: one unspoiled node at Riversmeet, up at 10:00 and 22:00, and two
+        // rows the sheet left behind in territory 1 with windows of their own. Counted, the list
+        // took the node for up at 0:00, 8:00, 12:00 and 20:00, found nothing to go to and skipped it.
+        var source = new Source();
+        source.Points.Add(new GatheringPointRef(31492, 397, 3, 55) { Timed = true, Windows = [W(1000), W(2200)] });
+        source.Points.Add(new GatheringPointRef(31758, 1, 3, 60) { Timed = true, Windows = [W(0), W(1200)] });
+        source.Points.Add(new GatheringPointRef(31760, 1, 3, 60) { Timed = true, Windows = [W(800), W(2000)] });
+
+        Assert.Equal([W(1000), W(2200)], ((IGatheringSource)source).WindowsFor(12882));
+
+        static NodeWindow W(int start) => new(NodeWindow.FromHhmm(start), NodeWindow.FromHhmm(160));
+    }
+
+    [Fact]
     public void An_unplaced_point_becomes_a_target_only_with_the_callers_zone_hint()
     {
         // The Qitari opener's three points all read territory 0 in the sheets, while the quest

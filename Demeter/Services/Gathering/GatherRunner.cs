@@ -69,6 +69,15 @@ public interface IGatherWorld
 
     bool UseAction(uint actionId);
 
+    /// <summary>The character has this buff on.</summary>
+    bool HasStatus(uint statusId);
+
+    /// <summary>Gathering points in hand.</summary>
+    int Gp { get; }
+
+    /// <summary>The action's recast is over.</summary>
+    bool OffCooldown(uint actionId);
+
     /// <summary>Stop dead. Interacting while still being moved is refused by the game.</summary>
     void StopMoving();
 
@@ -128,6 +137,43 @@ public sealed class GatherRunner
 
     private static readonly TimeSpan JobWait = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan DismountRetry = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Truth of Forests and Truth of Mountains: the buff that shows a Botanist or Miner the
+    /// unspoiled and other hidden nodes. Changing class takes it off, and it is a toggle — pressed
+    /// while on, it goes off — so it is pressed only while the game says it is off, and not again
+    /// until the game has had time to say otherwise.
+    /// </summary>
+    private const uint TruthOfForests = 221, TruthOfForestsStatus = 221;
+    private const uint TruthOfMountains = 238, TruthOfMountainsStatus = 222;
+    private static readonly TimeSpan TruthRetry = TimeSpan.FromSeconds(2.5);
+    private static readonly TimeSpan TruthWait = TimeSpan.FromSeconds(12);
+    private DateTime _truthSince, _truthPressed;
+
+    /// <summary>
+    /// Blessed Harvest and King's Yield: every gather on the node gives one more (two more for the
+    /// II). A timed node is the one node of its window, so the GP is spent there, once a node,
+    /// before its first gather — on the II when it is learned and affordable, else the plain one.
+    /// </summary>
+    private const uint BlessedHarvest = 222, BlessedHarvestII = 224, KingsYield = 239, KingsYieldII = 241;
+    private const int YieldCost = 400, YieldIICost = 500;
+    private const uint YieldUpStatus = 219, YieldUpIIStatus = 1286;
+    private readonly HashSet<uint> _timedNodes = new();
+    private bool _yieldAsked;
+
+    /// <summary>
+    /// The Twelve's Bounty and The Giving Land: more shards, crystals or clusters from the next
+    /// gather. They stack. The Giving Land is on a three-minute recast, so it goes on whenever it
+    /// is up; the Twelve's Bounty on every gather the GP pays for. Each is pressed at most once a
+    /// gather, so one the game takes without effect holds nothing up.
+    /// </summary>
+    private const uint TwelvesBountyMiner = 280, TwelvesBountyBotanist = 282, TwelvesBountyStatus = 825;
+    private const uint GivingLandMiner = 4589, GivingLandBotanist = 4590, GivingLandStatus = 1802;
+    private const int TwelvesBountyCost = 150, GivingLandCost = 200;
+    private readonly HashSet<uint> _crystalBuffsPressed = new();
+
+    /// <summary>The elemental shards, crystals and clusters: items 2 to 19.</summary>
+    private static bool IsCrystal(uint itemId) => itemId is >= 2 and <= 19;
     private static readonly TimeSpan OpenWait = TimeSpan.FromSeconds(12);
 
     /// <summary>
@@ -310,11 +356,14 @@ public sealed class GatherRunner
         _setAside.Clear();
         _leftUntil.Clear();
         _closeInNode = 0;
+        _timedNodes.Clear();
         foreach (var t in targets)
         {
             if (t.TerritoryId != target.TerritoryId || t.ClassJobId != target.ClassJobId)
                 continue; // one trip, one class
             _nodeIds.Add(t.NodeId);
+            if (t.Timed)
+                _timedNodes.Add(t.NodeId);
             foreach (var spawn in t.Spawns)
                 _stops.Add(new Stop(t.NodeId, spawn));
         }
@@ -336,6 +385,7 @@ public sealed class GatherRunner
         FailReason = string.Empty;
         NoWayInZone = false;
         _stopAfterNode = false;
+        _truthSince = _truthPressed = default;
         Enter(GatherRunState.SwitchingJob);
     }
 
@@ -436,6 +486,8 @@ public sealed class GatherRunner
                 Fault($"item {_itemId} is wanted as a collectable, and {noCollect}");
                 return;
             }
+            if (!TruthIsOn(target.ClassJobId))
+                return;
             Enter(GatherRunState.Travelling);
             return;
         }
@@ -454,6 +506,48 @@ public sealed class GatherRunner
         Status = $"Switching to class {target.ClassJobId}";
         if (!_world.EquipGearsetFor(target.ClassJobId, out var reason))
             Fault(reason.Length > 0 ? reason : $"no gearset for class {target.ClassJobId}");
+    }
+
+    /// <summary>
+    /// See that Truth is on before anything moves: without it a timed node is never there to walk
+    /// to, and the run goes round its spots finding nothing. True when it is on, when the character
+    /// has not learned it, or when it would not go on — which is said, and not a reason to stop.
+    /// </summary>
+    private bool TruthIsOn(uint classJobId)
+    {
+        var (action, status, name) = classJobId == GatheringAbilities.Botanist
+            ? (TruthOfForests, TruthOfForestsStatus, "Truth of Forests")
+            : (TruthOfMountains, TruthOfMountainsStatus, "Truth of Mountains");
+        if (_world.HasStatus(status) || _world.WhyCannotUse(action) is not null)
+            return true;
+
+        var now = _world.UtcNow;
+        if (_truthSince == default)
+        {
+            _truthSince = now;
+            _world.Log($"{name} is off — putting it on, so timed and hidden nodes show.");
+        }
+        else if (now - _truthSince > TruthWait)
+        {
+            _world.Log($"{name} would not go on ({_world.Conditions}) — going on without it; timed and hidden nodes will not show.");
+            return true;
+        }
+
+        Status = $"Putting {name} on";
+        if (_world.IsMounted)
+        {
+            if (now - _lastAction > DismountRetry)
+            {
+                _lastAction = now;
+                _world.Dismount();
+            }
+            return false;
+        }
+        if (_world.IsOccupied || now - _truthPressed < TruthRetry)
+            return false;
+        if (_world.UseAction(action))
+            _truthPressed = now;
+        return false;
     }
 
     private void TickTravel()
@@ -713,6 +807,7 @@ public sealed class GatherRunner
                 _slotChosenAt = default;
                 _plainPressed = false;
                 _plainPressTook = false;
+                _yieldAsked = false;
                 _world.ForgetSlotAttempts();
                 _fallback = null;
                 Enter(GatherRunState.Opening);
@@ -809,10 +904,33 @@ public sealed class GatherRunner
                 NextSpot($"the row for item {_itemId} did not respond");
                 return;
             }
+            if (IsCrystal(_fallback ?? _itemId) && CrystalBuff() is var (crystalBuff, crystalName))
+            {
+                _lastAction = _world.UtcNow;
+                _crystalBuffsPressed.Add(crystalBuff);
+                if (!_world.UseAction(crystalBuff))
+                    _world.Log($"{crystalName} was refused — gathering without it.");
+                return;
+            }
+            if (!_plainPressed && !_yieldAsked && _fallback is null && _timedNodes.Contains(_currentNode))
+            {
+                _yieldAsked = true;
+                if (YieldBuff() is var (buff, name, cost))
+                {
+                    _lastAction = _world.UtcNow;
+                    var gp = _world.Gp;
+                    if (_world.UseAction(buff))
+                        _world.Log($"Timed node {_currentNode}: {name} ({cost} of {gp} GP).");
+                    else
+                        _world.Log($"{name} was refused — gathering without it.");
+                    return;
+                }
+            }
             if (_plainPressed)
                 _world.ForgetSlotAttempts();
             _lastAction = _world.UtcNow;
             _plainPressTook = false;
+            _crystalBuffsPressed.Clear();
             if (_world.SelectSlotFor(_fallback ?? _itemId))
             {
                 _plainPressed = true;
@@ -864,6 +982,37 @@ public sealed class GatherRunner
             _world.CloseNode();
             NextSpot($"has no item {_itemId} to collect");
         }
+    }
+
+    /// <summary>The crystal buff to press before the next gather, or null: both on, pressed, not learned, or not the GP.</summary>
+    private (uint Action, string Name)? CrystalBuff()
+    {
+        var botanist = _target!.ClassJobId == GatheringAbilities.Botanist;
+        var spare = _world.Gp - GpReserve;
+        var land = botanist ? GivingLandBotanist : GivingLandMiner;
+        if (spare >= GivingLandCost && !_crystalBuffsPressed.Contains(land) && !_world.HasStatus(GivingLandStatus)
+            && _world.WhyCannotUse(land) is null && _world.OffCooldown(land))
+            return (land, "The Giving Land");
+        var bounty = botanist ? TwelvesBountyBotanist : TwelvesBountyMiner;
+        if (spare >= TwelvesBountyCost && !_crystalBuffsPressed.Contains(bounty) && !_world.HasStatus(TwelvesBountyStatus)
+            && _world.WhyCannotUse(bounty) is null)
+            return (bounty, "The Twelve's Bounty");
+        return null;
+    }
+
+    /// <summary>The yield buff to press on this node, or null: one already on, none learned, or not the GP.</summary>
+    private (uint Action, string Name, int Cost)? YieldBuff()
+    {
+        if (_world.HasStatus(YieldUpStatus) || _world.HasStatus(YieldUpIIStatus))
+            return null;
+        var botanist = _target!.ClassJobId == GatheringAbilities.Botanist;
+        var spare = _world.Gp - GpReserve;
+        var (two, one) = botanist ? (BlessedHarvestII, BlessedHarvest) : (KingsYieldII, KingsYield);
+        if (spare >= YieldIICost && _world.WhyCannotUse(two) is null)
+            return (two, botanist ? "Blessed Harvest II" : "King's Yield II", YieldIICost);
+        if (spare >= YieldCost && _world.WhyCannotUse(one) is null)
+            return (one, botanist ? "Blessed Harvest" : "King's Yield", YieldCost);
+        return null;
     }
 
     /// <summary>
@@ -1002,6 +1151,7 @@ public sealed class GatherRunner
         _slotChosenAt = default;
         _plainPressed = false;
         _plainPressTook = false;
+        _yieldAsked = false;
         _revisit = false;
         _spentAt = default;
         _world.ForgetSlotAttempts();

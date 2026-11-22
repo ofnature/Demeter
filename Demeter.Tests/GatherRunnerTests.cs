@@ -133,19 +133,70 @@ public class GatherRunnerTests
             Pressed.Add(itemId);
             if (PlainNode)
             {
-                if (Offers is null || itemId == 44850) Held++;
+                if (Offers is null || itemId == 44850) Held += 1 + _yieldBonus + _nextBonus;
+                _nextBonus = 0;
+                Statuses.Remove(825);
+                Statuses.Remove(1802);
                 Integrity--;
                 _actionLeft = 2;   // the gathering action plays through the next tick
-                if (Integrity <= 0) { NodeOpen = false; Spawned.Clear(); }
+                if (Integrity <= 0) { NodeOpen = false; Spawned.Clear(); _yieldBonus = 0; Statuses.Remove(219); }
                 return true;
             }
             Collectable = new CollectableState(0, 600, Integrity, 800, false, 0, ScourYield, MeticulousYield);
             return true;
         }
 
+        /// <summary>The buffs on the character. Truth is on unless a test takes it off.</summary>
+        public HashSet<uint> Statuses { get; } = [221, 222];
+        public bool HasStatus(uint statusId) => Statuses.Contains(statusId);
+
+        /// <summary>The game refuses Truth, whatever is pressed.</summary>
+        public bool TruthRefused { get; set; }
+
+        public int Gp { get; set; }
+
+        /// <summary>Extra items each gather gives while a yield buff is on.</summary>
+        private int _yieldBonus;
+
+        /// <summary>Extra items the next gather gives: The Twelve's Bounty and The Giving Land.</summary>
+        private int _nextBonus;
+        public HashSet<uint> OnCooldown { get; } = [];
+        public bool OffCooldown(uint actionId) => !OnCooldown.Contains(actionId);
+
         public bool UseAction(uint actionId)
         {
             Actions.Add(actionId);
+            if (actionId is 221 or 238) // Truth of Forests, Truth of Mountains: a toggle
+            {
+                if (IsMounted || TruthRefused) return false;
+                var status = actionId == 221 ? 221u : 222u;
+                if (!Statuses.Remove(status)) Statuses.Add(status);
+                return true;
+            }
+            if (actionId is 280 or 282) // The Twelve's Bounty
+            {
+                Gp -= 150;
+                _nextBonus += 3;
+                Statuses.Add(825);
+                return true;
+            }
+            if (actionId is 4589 or 4590) // The Giving Land
+            {
+                if (!OnCooldown.Add(actionId)) return false;
+                Gp -= 200;
+                _nextBonus += 5;
+                Statuses.Add(1802);
+                return true;
+            }
+            if (actionId is 222 or 224 or 239 or 241) // Blessed Harvest, King's Yield, and their IIs
+            {
+                var two = actionId is 224 or 241;
+                Gp -= two ? 500 : 400;
+                _yieldBonus = two ? 2 : 1;
+                Statuses.Add(219);
+                _actionLeft = 1;
+                return true;
+            }
             var state = Collectable!.Value;
             if (actionId is 240 or 815) // Collect
             {
@@ -308,6 +359,94 @@ public class GatherRunnerTests
         Assert.Equal(3, world.Log.Count(m => m.Contains("nothing up here") || m.Contains("could not be reached") || m.Contains("took too long")));
     }
 
+    [Theory]
+    [InlineData(16u, 600, 241u)]   // Miner: King's Yield II
+    [InlineData(17u, 600, 224u)]   // Botanist: Blessed Harvest II
+    [InlineData(17u, 450, 222u)]   // not the GP for II: Blessed Harvest
+    public void A_timed_node_is_worked_with_the_yield_buff_the_GP_allows(uint job, int gp, uint expected)
+    {
+        // A timed node is the one node of its window, so each of its gathers is made to count.
+        var target = Target(new Vector3(10, 0, 10)) with { ClassJobId = job, Timed = true };
+        var (runner, world) = Ready(target);
+        world.CurrentClassJob = job;
+        world.PlainNode = true;
+        world.Gp = gp;
+        runner.Begin(target, count: 99, minimumCollectability: 0);
+        Run(runner, world);
+
+        Assert.Equal(expected, Assert.Single(world.Actions));              // once a node, and before its first gather
+        Assert.Equal(4 * (expected is 224 or 241 ? 3 : 2), world.Held);
+        Assert.Contains(world.Log, l => l.Contains("GP"));
+    }
+
+    [Fact]
+    public void The_yield_buff_is_for_timed_nodes_and_only_what_is_learned_and_affordable()
+    {
+        var plain = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(plain);
+        world.PlainNode = true;
+        world.Gp = 900;
+        runner.Begin(plain, count: 4, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Empty(world.Actions);                                       // an ordinary node: the GP is kept
+        Assert.Equal(4, world.Held);
+
+        var timed = plain with { Timed = true };
+        (runner, world) = Ready(timed);
+        world.PlainNode = true;
+        world.Gp = 300;                                                    // not enough for either
+        runner.Begin(timed, count: 4, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Empty(world.Actions);
+        Assert.Equal(4, world.Held);
+
+        (runner, world) = Ready(timed);
+        world.PlainNode = true;
+        world.Gp = 900;
+        world.Unlearned[241] = "King's Yield II needs level 40";
+        runner.Begin(timed, count: 99, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Equal(239u, Assert.Single(world.Actions));                  // King's Yield, which it has
+    }
+
+    [Fact]
+    public void Crystals_are_gathered_with_the_Giving_Land_when_it_is_up_and_the_Twelves_Bounty_every_time()
+    {
+        // The two stack. The Giving Land has a three-minute recast, so it lands on one gather a
+        // node; the Twelve's Bounty goes on every gather the GP will pay for.
+        var target = Target(new Vector3(10, 0, 10)) with { ItemId = 8 };   // Fire Crystal
+        var (runner, world) = Ready(target);
+        world.PlainNode = true;
+        world.Gp = 700;
+        runner.Begin(target, count: 99, minimumCollectability: 0);
+        Run(runner, world);
+
+        Assert.Equal([4589u, 280, 280, 280], world.Actions);              // 200 + 150 × 3, then 50 GP: not enough
+        Assert.Equal(4 + 5 + 3 * 3, world.Held);
+    }
+
+    [Fact]
+    public void A_Botanist_under_74_has_the_Twelves_Bounty_alone_and_other_items_get_neither()
+    {
+        var crystal = Target(new Vector3(10, 0, 10)) with { ItemId = 4, ClassJobId = 17 };   // Wind Shard
+        var (runner, world) = Ready(crystal);
+        world.CurrentClassJob = 17;
+        world.PlainNode = true;
+        world.Gp = 700;
+        world.Unlearned[4590] = "The Giving Land needs level 74";
+        runner.Begin(crystal, count: 99, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Equal([282u, 282, 282, 282], world.Actions);
+
+        var ore = Target(new Vector3(10, 0, 10));
+        (runner, world) = Ready(ore);
+        world.PlainNode = true;
+        world.Gp = 700;
+        runner.Begin(ore, count: 99, minimumCollectability: 0);
+        Run(runner, world);
+        Assert.Empty(world.Actions);
+    }
+
     [Fact]
     public void A_long_plain_node_is_worked_past_the_window_wait_without_being_abandoned()
     {
@@ -361,6 +500,59 @@ public class GatherRunnerTests
         fake.IsInFlight = false; fake.IsMounted = false;
         for (var i = 0; i < 6 && runner.State == GatherRunState.Walking; i++) { runner.Tick(); world.Advance(0.5); fake.Advance(0.5); }
         Assert.NotEqual(GatherRunState.Walking, runner.State);
+    }
+
+    [Fact]
+    public void Truth_is_put_on_before_going_anywhere_when_it_is_off()
+    {
+        // Coerthan Tea Leaves: an unspoiled node, never shown to a Botanist without Truth of Forests,
+        // and changing class takes the buff off.
+        var target = Target(new Vector3(10, 0, 10)) with { ClassJobId = 17 };
+        var (runner, world) = Ready(target);
+        world.Statuses.Clear();
+        world.IsMounted = true;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 10 && runner.State == GatherRunState.SwitchingJob; i++) { runner.Tick(); world.Advance(1.5); }
+
+        Assert.NotEqual(GatherRunState.SwitchingJob, runner.State);
+        Assert.True(world.HasStatus(221));
+        Assert.Equal(1, world.Actions.Count(a => a == 221));   // a toggle: pressed twice it is off again
+        Assert.True(world.Dismounts > 0, "pressed from the saddle");
+        Assert.Contains(world.Log, l => l.Contains("Truth of Forests is off"));
+    }
+
+    [Fact]
+    public void Truth_already_on_or_not_yet_learned_is_left_alone()
+    {
+        var target = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(target);
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        runner.Tick();
+        Assert.Equal(GatherRunState.Travelling, runner.State);
+        Assert.DoesNotContain(238u, world.Actions);
+
+        (runner, world) = Ready(target);
+        world.Statuses.Clear();
+        world.Unlearned[238] = "Truth of Mountains needs level 46";
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        runner.Tick();
+        Assert.Equal(GatherRunState.Travelling, runner.State);
+        Assert.DoesNotContain(238u, world.Actions);
+    }
+
+    [Fact]
+    public void Truth_that_will_not_go_on_does_not_hold_the_run_up()
+    {
+        var target = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(target);
+        world.Statuses.Clear();
+        world.TruthRefused = true;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 20 && runner.State == GatherRunState.SwitchingJob; i++) { runner.Tick(); world.Advance(1.5); }
+
+        Assert.NotEqual(GatherRunState.SwitchingJob, runner.State);
+        Assert.NotEqual(GatherRunState.Faulted, runner.State);
+        Assert.Contains(world.Log, l => l.Contains("would not go on"));
     }
 
     [Fact]

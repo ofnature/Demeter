@@ -128,6 +128,31 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
 
     public string? WhyCannotUse(uint actionId) => Abilities?.WhyNot(actionId);
 
+    public int Gp => (int)(_objectTable.LocalPlayer?.CurrentGp ?? 0);
+
+    public bool OffCooldown(uint actionId)
+    {
+        try
+        {
+            var manager = ActionManager.Instance();
+            return manager != null && manager->IsActionOffCooldown(ActionType.Action, actionId);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public bool HasStatus(uint statusId)
+    {
+        if (_objectTable.LocalPlayer is not { } player)
+            return false;
+        foreach (var status in player.StatusList)
+            if (status.StatusId == statusId)
+                return true;
+        return false;
+    }
+
     public void FaceDataId(uint dataId)
     {
         try

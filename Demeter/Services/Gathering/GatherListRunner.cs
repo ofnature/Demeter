@@ -33,9 +33,16 @@ public sealed class GatherListRunner
     private readonly Func<DateTime> _now;
     private bool _repairing;
 
-    /// <summary>Windows a timed item is tried in before the run gives up on it.</summary>
+    /// <summary>
+    /// Windows in a row that give nothing before the run gives up on a timed item. A window that
+    /// adds to the bag starts the count again: farming a cluster to 99 takes many windows, and
+    /// counting every one ended the run after the third.
+    /// </summary>
     private const int MaxTimedWindows = 3;
     private readonly Dictionary<uint, int> _timedTries = new();
+
+    /// <summary>What the bag held of the item in hand when it was started.</summary>
+    private int _heldAtStart;
 
     /// <summary>The item in hand is one of the timed ones.</summary>
     private bool _currentTimed;
@@ -229,6 +236,8 @@ public sealed class GatherListRunner
             // This window's node is spent, whatever came of it.
             if (_currentTimed && _gatherer.UpFor(item, _now()) is { } left)
                 _workedUntil[item] = _now() + left;
+            if (_currentTimed && _held(item) > _heldAtStart)
+                _timedTries.Remove(item);
             // A timed node's window can close mid-run; the next one is another chance, a few times.
             if (short_ && !StopAfterRunRequested && WaitOf(item, _now()) is not null
                 && _timedTries.GetValueOrDefault(item) < MaxTimedWindows)
@@ -313,6 +322,7 @@ public sealed class GatherListRunner
             if (wait is not null)
                 _timedTries[item] = _timedTries.GetValueOrDefault(item) + 1;
             _currentTimed = wait is not null;
+            _heldAtStart = held;
             if (!_gatherer.Start(item, target - held, 0))
             {
                 Record(item, target, held, "skipped: the gatherer would not start");

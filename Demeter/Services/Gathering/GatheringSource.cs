@@ -71,11 +71,16 @@ public interface IGatheringSource
     /// <summary>
     /// When an item that only grows on timed nodes can be gathered, in Eorzea time. Empty when an
     /// always-there node yields it too — then there is nothing to wait for.
+    ///
+    /// <para>
+    /// Only points the sheet places count. A placeholder row keeps windows of its own, and a list
+    /// that took those for the node being up went for it, found nowhere to go and skipped the item.
+    /// </para>
     /// </summary>
     IReadOnlyList<Gathering.NodeWindow> WindowsFor(uint itemId)
     {
-        var points = PointsFor(itemId);
-        if (points.Count == 0 || points.Any(p => !p.Timed && p.HasZone))
+        var points = PointsFor(itemId).Where(p => p.HasZone).ToList();
+        if (points.Any(p => !p.Timed))
             return [];
         return points.SelectMany(p => p.Windows).Distinct().ToList();
     }

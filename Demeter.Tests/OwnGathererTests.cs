@@ -59,6 +59,9 @@ public class OwnGathererTests : IDisposable
         public bool IsMounted { get; set; }
         public void Dismount() => IsMounted = false;
         public bool IsInFlight => false;
+        public bool HasStatus(uint statusId) => true;
+        public int Gp => 0;
+        public bool OffCooldown(uint actionId) => true;
         public bool EquipGearsetFor(uint classJobId, out string reason) { CurrentClassJob = classJobId; reason = string.Empty; return true; }
         public int CollectableCount(uint itemId, int minimumCollectability) => 0;
         public bool IsDataIdSpawned(uint dataId) => false;
