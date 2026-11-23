@@ -39,6 +39,8 @@ public sealed unsafe class GameFishingWorld : IHoleWorld
     public bool IsFishing => _condition[ConditionFlag.Fishing];
 
     public bool EquipGearsetFor(uint classJobId, out string reason) => _gather.EquipGearsetFor(classJobId, out reason);
+    public bool GearingUp => _gather.GearingUp;
+    public string GearUpFailure => _gather.GearUpFailure;
 
     public void Face(float rotation)
     {

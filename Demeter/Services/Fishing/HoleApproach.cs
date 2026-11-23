@@ -15,6 +15,16 @@ public interface IHoleWorld
     /// <summary>Equip a gearset for this class. False when the character has none, with a reason.</summary>
     bool EquipGearsetFor(uint classJobId, out string reason);
 
+    /// <summary>
+    /// With no gearset for the class, one is being made: the game's Recommended Gear put on and
+    /// saved. The switch is not over until it is, though the class may already read right. Reading
+    /// it drives it.
+    /// </summary>
+    bool GearingUp => false;
+
+    /// <summary>Why making that gearset stopped short; empty when it did not.</summary>
+    string GearUpFailure => string.Empty;
+
     /// <summary>Turn to face this way (the game's yaw: zero is south, anticlockwise).</summary>
     void Face(float rotation);
 
@@ -156,6 +166,17 @@ public sealed class HoleApproach
 
     private void TickJob(DateTime now)
     {
+        if (_world.GearingUp)
+        {
+            Status = "Saving a Fisher gearset: putting on the game's Recommended Gear";
+            _phaseStart = now;
+            return;
+        }
+        if (_lastTry != default && _world.GearUpFailure is { Length: > 0 } noGearset)
+        {
+            Fault(noGearset);
+            return;
+        }
         if (_world.CurrentClassJob == Fisher)
         {
             BeginTravel();

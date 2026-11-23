@@ -20,10 +20,32 @@ public class GatherRunnerTests
         public bool IsMounted { get; set; }
         public int Dismounts { get; private set; }
 
+        /// <summary>A gearset being made over this many ticks, then the class it was for; or a failure.</summary>
+        public int GearUpTicks { get; set; } = -1;
+        public string GearUpFails { get; set; } = string.Empty;
+        private uint _gearingFor;
+        public bool GearingUp
+        {
+            get
+            {
+                if (_gearingFor == 0 || GearUpTicks <= 0) return false;
+                if (--GearUpTicks > 0) return true;
+                if (GearUpFails.Length == 0) { CurrentClassJob = _gearingFor; HasGearsetFor.Add(_gearingFor); }
+                return false;
+            }
+        }
+        public string GearUpFailure => _gearingFor != 0 && GearUpTicks == 0 ? GearUpFails : string.Empty;
+
         public bool EquipGearsetFor(uint classJobId, out string reason)
         {
             if (!HasGearsetFor.Contains(classJobId))
             {
+                if (GearUpTicks > 0)
+                {
+                    _gearingFor = classJobId;
+                    reason = string.Empty;
+                    return true;
+                }
                 reason = $"no gearset for class {classJobId}";
                 return false;
             }
@@ -121,6 +143,7 @@ public class GatherRunnerTests
 
         /// <summary>What the node offers; null means whatever is asked for.</summary>
         public HashSet<uint>? Offers { get; set; }
+        public IReadOnlyList<uint> NodeItems => ItemListOpen && Offers is { } o ? o.ToList() : [];
         public List<uint> Pressed { get; } = [];
 
         public bool SelectSlotFor(uint itemId)
@@ -226,8 +249,23 @@ public class GatherRunnerTests
         public void CloseNode()
         {
             if (HoldWindowOpen) return; // the game refuses while an action is mid-play
+            if (AsksBeforeLeaving) { LeavePromptUp = true; return; }
             NodeOpen = false;
             Collectable = null;
+        }
+
+        /// <summary>A node with gathers left: closing it asks first, with a tick box before Yes.</summary>
+        public bool AsksBeforeLeaving { get; set; }
+        public bool LeavePromptUp { get; private set; }
+        public int LeavesConfirmed { get; private set; }
+        public bool ConfirmLeavingNode()
+        {
+            if (!LeavePromptUp) return false;
+            LeavePromptUp = false;
+            LeavesConfirmed++;
+            NodeOpen = false;
+            Collectable = null;
+            return true;
         }
         void IGatherWorld.Log(string message) => Log.Add(message);
 
@@ -311,8 +349,8 @@ public class GatherRunnerTests
         Run(runner, world);
 
         Assert.Equal(GatherRunState.Done, runner.State);
-        Assert.Equal(3, world.Held);
-        Assert.Equal(3, world.SlotPicks);
+        Assert.Equal(5, world.Held);                                   // three asked for, and the node gathered out
+        Assert.Equal(5, world.SlotPicks);
         Assert.True(world.Forgets >= 2, "the once-per-item guard was never lifted between presses");
         Assert.Empty(world.Actions);   // no rotation on a plain node
         Assert.DoesNotContain(world.Log, m => m.Contains("collectable window did not open"));
@@ -460,7 +498,7 @@ public class GatherRunnerTests
         Run(runner, world);
 
         Assert.True(runner.State == GatherRunState.Done, runner.FailReason + " || " + string.Join(" ; ", world.Log));
-        Assert.Equal(10, world.Held);
+        Assert.Equal(12, world.Held);                                  // ten asked for; the node's last two too
         Assert.DoesNotContain(world.Log, m => m.Contains("no window appeared"));
         Assert.DoesNotContain(world.Log, m => m.Contains("trying the next"));
     }
@@ -500,6 +538,36 @@ public class GatherRunnerTests
         fake.IsInFlight = false; fake.IsMounted = false;
         for (var i = 0; i < 6 && runner.State == GatherRunState.Walking; i++) { runner.Tick(); world.Advance(0.5); fake.Advance(0.5); }
         Assert.NotEqual(GatherRunState.Walking, runner.State);
+    }
+
+    [Fact]
+    public void A_class_with_no_gearset_waits_while_one_is_saved_however_long_it_takes()
+    {
+        var target = Target(new Vector3(10, 0, 10)) with { ClassJobId = 17 };
+        var (runner, world) = Ready(target);
+        world.HasGearsetFor.Remove(17);
+        world.GearUpTicks = 30;                       // 45 s at 1.5 s a tick: past the 15 s switch wait
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 40 && runner.State == GatherRunState.SwitchingJob; i++) { runner.Tick(); world.Advance(1.5); }
+
+        Assert.NotEqual(GatherRunState.Faulted, runner.State);
+        Assert.NotEqual(GatherRunState.SwitchingJob, runner.State);
+        Assert.Equal(17u, world.CurrentClassJob);
+    }
+
+    [Fact]
+    public void A_gearset_that_could_not_be_saved_stops_the_run_with_why()
+    {
+        var target = Target(new Vector3(10, 0, 10)) with { ClassJobId = 17 };
+        var (runner, world) = Ready(target);
+        world.HasGearsetFor.Remove(17);
+        world.GearUpTicks = 3;
+        world.GearUpFails = "no gearset for Botanist, and none could be saved: there is no Botanist tool in the Armoury Chest or the bags";
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 10 && runner.State == GatherRunState.SwitchingJob; i++) { runner.Tick(); world.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Faulted, runner.State);
+        Assert.Contains("no Botanist tool", runner.FailReason);
     }
 
     [Fact]
@@ -932,6 +1000,7 @@ public class GatherRunnerTests
         var target = Target(new Vector3(10, 0, 10));
         var (runner, world) = Ready(target);
         world.HoldWindowOpen = true;   // the collect leaves the window up, as a real node does
+        world.Integrity = 1;           // and that collect was the node's last
 
         runner.Begin(target, count: 1, minimumCollectability: 600);
         for (var i = 0; i < 10 && world.Held < 1; i++) { runner.Tick(); world.Advance(1.5); }
@@ -944,6 +1013,56 @@ public class GatherRunnerTests
         for (var i = 0; i < 10 && runner.State != GatherRunState.Done; i++) { runner.Tick(); world.Advance(1.5); }
         Assert.Equal(GatherRunState.Done, runner.State);
         Assert.False(world.NodeOpen);
+    }
+
+    [Fact]
+    public void A_node_left_with_gathers_on_it_has_its_prompt_answered()
+    {
+        var target = Target(new Vector3(10, 0, 10)) with { Timed = true };
+        var (runner, world) = Ready(target);
+        world.PlainNode = true;
+        runner.Begin(target, count: 9, minimumCollectability: 0);
+        for (var i = 0; i < 10 && world.Held < 1; i++) { runner.Tick(); world.Advance(1.5); }
+
+        world.AsksBeforeLeaving = true; // "leave anyway?", Yes greyed until the box is ticked
+        runner.Cancel();                // stopped with the node part-gathered
+        for (var i = 0; i < 20 && runner.State != GatherRunState.Idle; i++) { runner.Tick(); world.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Idle, runner.State);
+        Assert.Equal(1, world.LeavesConfirmed);
+        Assert.False(world.NodeOpen);
+    }
+
+    [Fact]
+    public void A_timed_node_is_gathered_out_on_its_item_once_enough_is_in_the_bag()
+    {
+        var target = Target(new Vector3(10, 0, 10)) with { Timed = true };
+        var (runner, world) = Ready(target);
+        world.PlainNode = true;
+        world.AsksBeforeLeaving = true;   // leaving it early would ask
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        Run(runner, world);
+
+        Assert.Equal(GatherRunState.Done, runner.State);
+        Assert.Equal(4, world.Held);                                  // all four of its gathers
+        Assert.All(world.Pressed, p => Assert.Equal(44850u, p));
+        Assert.Equal(0, world.LeavesConfirmed);                      // gathered out, so never asked
+    }
+
+    [Fact]
+    public void An_ordinary_node_is_finished_on_its_best_crystal_row_once_enough_is_in_the_bag()
+    {
+        var target = Target(new Vector3(10, 0, 10));
+        var (runner, world) = Ready(target);
+        world.PlainNode = true;
+        world.Integrity = 5;
+        world.Offers = [44850, 2, 14];                                 // Fire Shard and Fire Cluster beside the item
+        runner.Begin(target, count: 2, minimumCollectability: 0);
+        Run(runner, world);
+
+        Assert.Equal(GatherRunState.Done, runner.State);
+        Assert.Equal([44850u, 44850, 14, 14, 14], world.Pressed);    // the cluster, not the shard
+        Assert.Contains(world.Log, l => l.Contains("finishing it on item 14"));
     }
 
     [Fact]

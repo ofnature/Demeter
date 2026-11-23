@@ -23,7 +23,7 @@ public sealed record GearsetInfo(int Id, uint ClassJobId, uint ParentClassJobId,
 /// original: every judgement lives in <see cref="Traveller"/>, <see cref="GatherRunner"/> and the
 /// list runner, where the fakes can test it.
 /// </summary>
-public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityState
+public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityState, IGearUpGame
 {
     /// <summary>GeneralAction 9 — Mount Roulette.</summary>
     private const uint MountRouletteGeneralAction = 9;
@@ -378,6 +378,110 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityStat
         {
             _log($"EquipGearset {gearsetId} failed: {ex.Message}");
             return false;
+        }
+    }
+
+    // ── Making a gearset (GearUp) ──
+
+    private static FFXIVClientStructs.FFXIV.Client.UI.Misc.RecommendEquipModule* Recommend
+        => FFXIVClientStructs.FFXIV.Client.UI.Misc.RecommendEquipModule.Instance();
+
+    public bool RecommendBusy
+    {
+        get
+        {
+            try { var m = Recommend; return m != null && m->IsUpdating; }
+            catch { return false; }
+        }
+    }
+
+    public bool RecommendFor(uint classJobId)
+    {
+        try
+        {
+            var m = Recommend;
+            return m != null && m->SetupForClassJob((byte)classJobId);
+        }
+        catch (Exception ex)
+        {
+            _log($"Recommended Gear for class {classJobId} failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public uint RecommendedMainHand
+    {
+        get
+        {
+            try
+            {
+                var m = Recommend;
+                return m == null || m->EquippedMainHand == null ? 0 : m->EquippedMainHand->ItemId;
+            }
+            catch { return 0; }
+        }
+    }
+
+    public bool PutOnRecommendedMainHand()
+    {
+        try
+        {
+            var m = Recommend;
+            var inventory = InventoryManager.Instance();
+            if (m == null || inventory == null || m->EquippedMainHand == null)
+                return false;
+            var tool = m->EquippedMainHand;
+            inventory->MoveItemSlot(tool->Container, (ushort)tool->Slot, InventoryType.EquippedItems, 0, true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log($"Putting the tool on failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    public void PutOnRecommended()
+    {
+        try
+        {
+            var m = Recommend;
+            if (m != null)
+                m->EquipRecommendedGear();
+        }
+        catch (Exception ex)
+        {
+            _log($"Recommended Gear failed: {ex.Message}");
+        }
+    }
+
+    public bool GearsetSlotFree
+    {
+        get
+        {
+            try
+            {
+                var module = FFXIVClientStructs.FFXIV.Client.UI.Misc.RaptureGearsetModule.Instance();
+                return module != null && module->FirstEmptyGearsetSlot() is >= 0 and < 255;
+            }
+            catch { return false; }
+        }
+    }
+
+    public int SaveGearset()
+    {
+        try
+        {
+            var module = FFXIVClientStructs.FFXIV.Client.UI.Misc.RaptureGearsetModule.Instance();
+            if (module == null)
+                return -1;
+            var id = module->CreateGearset();
+            return id is >= 0 and < 255 ? id : -1;
+        }
+        catch (Exception ex)
+        {
+            _log($"Saving a gearset failed: {ex.Message}");
+            return -1;
         }
     }
 

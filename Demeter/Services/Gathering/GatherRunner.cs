@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Demeter.Services.Travel;
 
@@ -18,6 +19,16 @@ public interface IGatherWorld
 
     /// <summary>Equip a gearset for this class. False when the character has none, with a reason.</summary>
     bool EquipGearsetFor(uint classJobId, out string reason);
+
+    /// <summary>
+    /// With no gearset for the class, one is being made: the game's Recommended Gear put on and
+    /// saved. The switch is not over until it is, though the class may already read right. Reading
+    /// it drives it.
+    /// </summary>
+    bool GearingUp => false;
+
+    /// <summary>Why making that gearset stopped short; empty when it did not.</summary>
+    string GearUpFailure => string.Empty;
 
     bool IsMounted { get; }
 
@@ -67,6 +78,9 @@ public interface IGatherWorld
     /// <summary>Choose the slot yielding this item, so the node's other offerings are left alone.</summary>
     bool SelectSlotFor(uint itemId);
 
+    /// <summary>The items in the open node's rows; empty when no list is up.</summary>
+    IReadOnlyList<uint> NodeItems => Array.Empty<uint>();
+
     bool UseAction(uint actionId);
 
     /// <summary>The character has this buff on.</summary>
@@ -91,6 +105,14 @@ public interface IGatherWorld
     void ForgetSlotAttempts();
 
     void CloseNode();
+
+    /// <summary>
+    /// Leaving a node with gathers still on it — a timed one, say — the game asks first, and its
+    /// Yes stays greyed until the tick box beside it is ticked. Tick it and say yes, if that
+    /// prompt is up over an open node; true when it was answered.
+    /// </summary>
+    bool ConfirmLeavingNode() => false;
+
     void Log(string message);
 
     /// <summary>
@@ -310,28 +332,72 @@ public sealed class GatherRunner
     public int Gathered => Held - _baseline;
 
     /// <summary>
-    /// What a node's remaining attempts go on once the item wanted is gone from it: Dark Matter
-    /// Cluster. An unspoiled node gives up its one item and keeps its integrity; walking away from
-    /// it left a 100% cluster behind every window.
+    /// What a node's remaining attempts go on once the item wanted is gone from it, or once enough
+    /// of it is in the bag: Dark Matter Cluster first, then clusters, crystals and shards, then
+    /// whatever else the node has. A node is gathered out, not left: an unspoiled node gives up its
+    /// one item and keeps its integrity, walking away left a 100% cluster behind every window, and
+    /// a timed node left with gathers on it asks before letting go.
     /// </summary>
-    private static readonly uint[] Fallbacks = [10335];
+    private const uint DarkMatterCluster = 10335;
+
+    /// <summary>The node's rows, best spare first; <paramref name="crystalsOnly"/> stops before the rest.</summary>
+    private IEnumerable<uint> Spares(bool crystalsOnly)
+    {
+        var rows = _world.NodeItems.Where(i => i != 0 && i != _itemId && i != _fallback).ToList();
+        var best = rows.Where(i => i == DarkMatterCluster)
+            .Concat(rows.Where(IsCrystal).OrderByDescending(i => i));   // clusters, then crystals, then shards
+        return crystalsOnly ? best : best.Concat(rows.Where(i => i != DarkMatterCluster && !IsCrystal(i)));
+    }
 
     /// <summary>The fallback being gathered on this node, once the item wanted ran out on it.</summary>
     private uint? _fallback;
+
+    /// <summary>Enough is in the bag, and the node in hand is being gathered out before it is left.</summary>
+    private bool _finishing;
 
     /// <summary>Only timed nodes: one node, somewhere among its spots, and gone once worked.</summary>
     private bool _timedOnly;
 
     private bool TryFallback()
     {
-        foreach (var item in Fallbacks)
+        foreach (var item in Spares(crystalsOnly: false))
         {
-            if (item == _itemId || !_world.SelectSlotFor(item)) continue;
+            if (!_world.SelectSlotFor(item)) continue;
             _fallback = item;
-            _world.Log($"Item {_itemId} is gone from node {_currentNode} — spending the rest of it on item {item} (Dark Matter Cluster).");
+            var name = item == DarkMatterCluster ? " (Dark Matter Cluster)" : string.Empty;
+            _world.Log(_finishing
+                ? $"Node {_currentNode}: finishing it on item {item}{name}."
+                : $"Item {_itemId} is gone from node {_currentNode} — spending the rest of it on item {item}{name}.");
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Enough is in the bag with the node still open: gather it out. A timed node goes on giving
+    /// the item it is for; an ordinary one's attempts go on its shards, crystals or clusters where
+    /// it has them, and on the item where it has none.
+    /// </summary>
+    private void FinishNode()
+    {
+        _finishing = true;
+        _world.Log($"Node {_currentNode}: {Gathered} of {_wanted} gathered — gathering the node out before leaving.");
+        Status = $"Node {_currentNode}: {Gathered} of {_wanted} gathered — finishing the node.";
+    }
+
+    /// <summary>
+    /// An ordinary node being finished goes on its best crystal row. Chosen at the press, not when
+    /// finishing begins: the list hides while a gather plays, and its rows cannot be read then.
+    /// </summary>
+    private void FinishOnCrystals()
+    {
+        if (!_finishing || _fallback is not null || _timedNodes.Contains(_currentNode))
+            return;
+        if (Spares(crystalsOnly: true).FirstOrDefault() is var spare and not 0)
+        {
+            _fallback = spare;
+            _world.Log($"Node {_currentNode}: finishing it on item {spare}.");
+        }
     }
 
     /// <summary>Work one node's spots. Kept for a caller that has already chosen.</summary>
@@ -372,6 +438,7 @@ public sealed class GatherRunner
         _itemId = target.ItemId;
         _wanted = count;
         _fallback = null;
+        _finishing = false;
         _timedOnly = System.Linq.Enumerable.All(targets, t => t.Timed);
         _collectability = minimumCollectability;
         _spawn = 0;
@@ -435,6 +502,15 @@ public sealed class GatherRunner
 
     public GatherRunState Tick()
     {
+        // A node left with gathers on it asks first, and nothing else moves until that is answered.
+        if (_leftAt != default && _world.NodeOpen && _world.UtcNow - _leftAt < LeavePromptWait
+            && _world.UtcNow - _confirmedAt > ActionGap && _world.ConfirmLeavingNode())
+        {
+            _confirmedAt = _world.UtcNow;
+            _world.Log($"Node {_currentNode}: the game asked to confirm leaving it with gathers left — ticked and answered yes.");
+            return State;
+        }
+
         // Closing runs even with no target: a cancelled run still owns its open window.
         if (State == GatherRunState.Closing)
         {
@@ -447,7 +523,14 @@ public sealed class GatherRunner
 
         // What this run has gathered is the only thing that decides it is finished — but finished
         // still means seeing the window shut, or the teleport that follows is refused into it.
-        if (State != GatherRunState.Closing && Gathered >= _wanted)
+        // A collectable window at no integrity is spent, though it may not have shut yet.
+        if (State == GatherRunState.Working && Gathered >= _wanted && _world.NodeOpen && _windowSeen && !ProbeOnly
+            && _world.Collectable is not { IntegrityLeft: <= 0 })
+        {
+            if (!_finishing)
+                FinishNode();
+        }
+        else if (State != GatherRunState.Closing && Gathered >= _wanted)
         {
             _travel.Cancel();
             Status = $"Gathered {_wanted} more of item {_itemId} at {_collectability}+ — closing up.";
@@ -476,6 +559,17 @@ public sealed class GatherRunner
     private void TickJob()
     {
         var target = _target!;
+        if (_world.GearingUp)
+        {
+            Status = "Saving a gearset: putting on the game's Recommended Gear";
+            _phaseStart = _world.UtcNow;   // its own steps have their own waits
+            return;
+        }
+        if (_lastAction != default && _world.GearUpFailure is { Length: > 0 } noGearset)
+        {
+            Fault(noGearset);
+            return;
+        }
         if (_world.CurrentClassJob == target.ClassJobId)
         {
             // A collectable needs Collect, which a quest teaches, not a level. Finding that out at the
@@ -741,6 +835,7 @@ public sealed class GatherRunner
         }
 
         _world.Log($"Opening node {_currentNode}: {_world.Conditions}");
+        _leftAt = default;
         _lastOpenAccepted = _world.TryInteractWithDataId(_currentNode);
     }
 
@@ -755,7 +850,7 @@ public sealed class GatherRunner
                 {
                     _world.Log($"Probe: node {_currentNode} began gathering but no window appeared in " +
                                $"{WindowWait.TotalSeconds:F0}s — {_world.Conditions}");
-                    _world.CloseNode();
+                    Leave();
                     State = GatherRunState.Done;
                 }
                 return;
@@ -763,7 +858,7 @@ public sealed class GatherRunner
 
             _world.Log($"Probe: node {_currentNode} opened — {_world.Conditions}");
             _world.DescribeOpenWindow();
-            _world.CloseNode();
+            Leave();
             Status = $"Probe: node {_currentNode} opened and was left alone.";
             State = GatherRunState.Done;
             return;
@@ -879,7 +974,7 @@ public sealed class GatherRunner
             {
                 if (_world.ExecutingAction)
                     return;
-                _world.CloseNode();
+                Leave();
                 NextSpot($"gathering began but no window appeared in {WindowWait.TotalSeconds:F0}s");
             }
             return;
@@ -900,10 +995,11 @@ public sealed class GatherRunner
             {
                 if (_world.UtcNow - _lastAction < PlainPressGrace)
                     return;
-                _world.CloseNode();
+                Leave();
                 NextSpot($"the row for item {_itemId} did not respond");
                 return;
             }
+            FinishOnCrystals();
             if (IsCrystal(_fallback ?? _itemId) && CrystalBuff() is var (crystalBuff, crystalName))
             {
                 _lastAction = _world.UtcNow;
@@ -934,18 +1030,22 @@ public sealed class GatherRunner
             if (_world.SelectSlotFor(_fallback ?? _itemId))
             {
                 _plainPressed = true;
-                Status = _fallback is { } spare
-                    ? $"Node {_currentNode}: item {_itemId} is gone — gathering item {spare} with what is left."
-                    : $"Node {_currentNode}: {Gathered} of {_wanted} gathered.";
+                Status = _finishing
+                    ? $"Node {_currentNode}: {Gathered} of {_wanted} gathered — finishing the node on item {_fallback ?? _itemId}."
+                    : _fallback is { } spare
+                        ? $"Node {_currentNode}: item {_itemId} is gone — gathering item {spare} with what is left."
+                        : $"Node {_currentNode}: {Gathered} of {_wanted} gathered.";
             }
-            else if (_fallback is null && TryFallback())
+            else if (TryFallback())
             {
                 _plainPressed = true;
-                Status = $"Node {_currentNode}: item {_itemId} is gone — gathering item {_fallback} with what is left.";
+                Status = _finishing
+                    ? $"Node {_currentNode}: {Gathered} of {_wanted} gathered — finishing the node on item {_fallback}."
+                    : $"Node {_currentNode}: item {_itemId} is gone — gathering item {_fallback} with what is left.";
             }
             else
             {
-                _world.CloseNode();
+                Leave();
                 NextSpot($"has no item {_fallback ?? _itemId} to gather");
             }
             return;
@@ -956,7 +1056,7 @@ public sealed class GatherRunner
         {
             if (_world.UtcNow - _slotChosenAt > WindowWait)
             {
-                _world.CloseNode();
+                Leave();
                 NextSpot($"chose the row for item {_itemId} but the collectable window did not open");
             }
             return;
@@ -979,7 +1079,7 @@ public sealed class GatherRunner
         }
         else
         {
-            _world.CloseNode();
+            Leave();
             NextSpot($"has no item {_itemId} to collect");
         }
     }
@@ -1044,9 +1144,22 @@ public sealed class GatherRunner
         if (_world.NodeOpen && _world.UtcNow - _lastAction > DismountRetry)
         {
             _lastAction = _world.UtcNow;
-            _world.CloseNode();
+            Leave();
         }
     }
+
+    /// <summary>Ask the node's window to shut, and watch a while for the game asking whether to.</summary>
+    private void Leave()
+    {
+        _leftAt = _world.UtcNow;
+        _world.CloseNode();
+    }
+
+    /// <summary>How long after leaving a node its "leave anyway?" prompt is looked for.</summary>
+    private static readonly TimeSpan LeavePromptWait = TimeSpan.FromSeconds(15);
+
+    private DateTime _leftAt;
+    private DateTime _confirmedAt;
 
     /// <summary>Nodes move as they are worked, so the next spot is expected, not a failure.</summary>
     private void NextSpot(string why, string? unreachable = null)

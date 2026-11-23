@@ -1,6 +1,12 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.10 — 2026-11-23
+
+- A node is gathered out before it is left. Once enough is in the bag, a timed node goes on giving its item to the end (then its Dark Matter Cluster, crystals or anything else on it); an ordinary node's remaining gathers go on its best cluster, crystal or shard row, or on the item where it has none; a collectable node is worked until its integrity is spent. A timed node left with gathers on it stopped behind the game's "leave this node?" prompt
+- That prompt, when a run is stopped mid-node, is answered: the box beside Yes is ticked and Yes pressed
+- A gather for a class with no gearset makes one: the class's best tool from the Armoury Chest or the bags is put on, the game's Recommended Gear is put on with it, and that is saved as a new gearset (Miner, Botanist and Fisher). With no tool, no free gearset slot, or the game refusing, the run stops and says which
+
 ## v0.1.9 — 2026-11-22
 
 - A node counts as showing from four levels below its own: a Botanist 52 works Rainbow Cotton Boll's level 55 nodes, which v0.1.8 locked until 55. A Botanist 49 still does not see them

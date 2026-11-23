@@ -67,7 +67,23 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
         _gameGui = gameGui;
         _steps = steps;
         _log = log;
+        _gearUp = new GearUp(steps, () => DateTime.UtcNow, log);
     }
+
+    /// <summary>Saves a gearset for a class that has none. See <see cref="GearUp"/>.</summary>
+    private readonly GearUp _gearUp;
+
+    public bool GearingUp => _gearUp.Tick();
+
+    public string GearUpFailure => _gearUp.Failure;
+
+    private static string ClassName(uint classJobId) => classJobId switch
+    {
+        GatheringAbilities.Miner => "Miner",
+        GatheringAbilities.Botanist => "Botanist",
+        GatheringAbilities.Fisher => "Fisher",
+        _ => $"class {classJobId}",
+    };
 
     public DateTime UtcNow => DateTime.UtcNow;
 
@@ -88,9 +104,11 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
     /// <summary>
     /// Equip a gearset for the class. Matched on the gearset's own class or its parent, so a job
     /// saved over its base class still counts; the highest-level one wins where there are several.
+    /// With none, one is made (<see cref="GearUp"/>) and the switch happens as it goes on.
     /// </summary>
     public bool EquipGearsetFor(uint classJobId, out string reason)
     {
+        _gearUp.Forget();
         try
         {
             GearsetInfo? best = null;
@@ -101,7 +119,10 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
 
             if (best is null)
             {
-                reason = $"no gearset for class {classJobId} — save one for it, then start again";
+                reason = string.Empty;
+                if (_gearUp.Begin(classJobId, ClassName(classJobId)))
+                    return true;
+                reason = _gearUp.Failure;
                 return false;
             }
 
@@ -474,6 +495,40 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
         }
     }
 
+    public IReadOnlyList<uint> NodeItems
+    {
+        get
+        {
+            try
+            {
+                var window = GatheringList();
+                var items = new List<uint>();
+                if (window == null)
+                    return items;
+                for (var slot = 0; slot < SlotCount; slot++)
+                {
+                    var index = FirstItemValue + slot * ValuesPerSlot;
+                    if (index >= window->AtkValuesCount)
+                        break;
+                    var value = window->AtkValues[index];
+                    var item = value.Type switch
+                    {
+                        AtkValueType.UInt => value.UInt,
+                        AtkValueType.Int => (uint)Math.Max(0, value.Int),
+                        _ => 0u,
+                    };
+                    if (item != 0)
+                        items.Add(item);
+                }
+                return items;
+            }
+            catch
+            {
+                return Array.Empty<uint>();
+            }
+        }
+    }
+
     /// <summary>
     /// Which of the eight rows yields the item, or -1.
     ///
@@ -675,6 +730,35 @@ public sealed unsafe class GameGatherWorld : IGatherWorld
         catch (Exception ex)
         {
             _log($"Leaving the node failed: {ex.Message}");
+        }
+    }
+
+    public bool ConfirmLeavingNode()
+    {
+        try
+        {
+            if (!NodeOpen)
+                return false;
+            var found = _gameGui.GetAddonByName("SelectYesno");
+            if (found.IsNull || !found.IsVisible)
+                return false;
+            var prompt = (AddonSelectYesno*)found.Address;
+            var text = prompt->PromptText == null ? string.Empty : prompt->PromptText->NodeText.ToString();
+
+            // The tick box is what lets Yes be pressed: tick it, as a person would, then press Yes.
+            var box = prompt->ConfirmCheckBox;
+            if (box != null && !box->AtkComponentButton.IsChecked)
+                box->AtkComponentButton.SetChecked(true);
+            if (prompt->YesButton != null)
+                prompt->YesButton->SetEnabledState(true);
+            prompt->AtkUnitBase.FireCallbackInt(0);
+            _log($"Answered yes to \"{text.ReplaceLineEndings(" ")}\"{(box != null ? " (box ticked)" : string.Empty)}.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log($"Answering the leave-the-node prompt failed: {ex.Message}");
+            return false;
         }
     }
 
