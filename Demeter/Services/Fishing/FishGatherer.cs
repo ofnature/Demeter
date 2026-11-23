@@ -238,6 +238,7 @@ public sealed class CompositeGatherer : IOwnGatherer
     public uint? ZoneOf(uint itemId) => For(itemId).ZoneOf(itemId);
     public string Where(uint itemId) => For(itemId).Where(itemId);
     public string Timer(uint itemId, DateTime utc) => For(itemId).Timer(itemId, utc);
+    public string? LevelLock(uint itemId) => For(itemId).LevelLock(itemId);
     public TimeSpan? WaitFor(uint itemId, DateTime utc) => For(itemId).WaitFor(itemId, utc);
     public TimeSpan? UpFor(uint itemId, DateTime utc) => For(itemId).UpFor(itemId, utc);
 

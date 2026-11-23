@@ -308,6 +308,12 @@ public sealed class GatherListRunner
                 Record(item, target, held, "already held");
                 continue;
             }
+            // Its nodes do not show at this level, in a window or out of one.
+            if (_gatherer.LevelLock(item) is { } locked)
+            {
+                Record(item, target, held, $"skipped: {locked}");
+                continue;
+            }
             var wait = WaitOf(item, now);
             if (wait is { } w && w > TimeSpan.Zero)
             {
@@ -325,7 +331,7 @@ public sealed class GatherListRunner
             _heldAtStart = held;
             if (!_gatherer.Start(item, target - held, 0))
             {
-                Record(item, target, held, "skipped: the gatherer would not start");
+                Record(item, target, held, $"skipped: {_gatherer.WhyNot(item)}");
                 continue;
             }
             _current = (item, target);

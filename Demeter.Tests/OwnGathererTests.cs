@@ -185,6 +185,34 @@ public class OwnGathererTests : IDisposable
     }
 
     [Fact]
+    public void An_item_whose_nodes_are_all_above_the_gatherers_level_is_not_started()
+    {
+        // Rainbow Cotton Boll: Botanist 55 nodes at Twinpools, never shown to a Botanist below it,
+        // so the run walked its twelve spots finding nothing.
+        var atlas = Atlas("""{ "31383": [ {"X":1,"Y":0,"Z":1}, {"X":2,"Y":0,"Z":2} ], "31382": [ {"X":5,"Y":0,"Z":5} ] }""");
+        var source = new Source();
+        source.Points[12597] = [new GatheringPointRef(31383, 397, 3, 55), new GatheringPointRef(31382, 397, 3, 55)];
+        var log = new List<string>();
+        var world = new GatherWorldStub { TerritoryId = 129, CurrentClassJob = 34 };
+        var level = 49;
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(new FakeTravelWorld())), source, atlas, log.Add)
+        {
+            Enabled = true,
+            LevelOf = job => job == 17 ? level : 0,
+        };
+
+        Assert.False(own.Start(12597, 99, 0));
+        Assert.False(own.Busy);
+        Assert.Contains(log, l => l.Contains("needs Botanist 55; this character is Botanist 49"));
+        Assert.Contains("needs Botanist 55", own.WhyNot(12597));
+        Assert.Equal("needs Botanist 55; this character is Botanist 49 — its nodes do not show below that", own.LevelLock(12597));
+
+        level = 55;
+        Assert.Null(own.LevelLock(12597));
+        Assert.True(own.Start(12597, 99, 0));
+    }
+
+    [Fact]
     public void A_run_that_has_only_just_begun_reads_as_busy()
     {
         // It began in SwitchingJob, which an enumeration of "the busy states" missed — and a caller

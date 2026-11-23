@@ -44,6 +44,13 @@ public interface IOwnGatherer
     string Timer(uint itemId, DateTime utc) => string.Empty;
 
     /// <summary>
+    /// "needs Botanist 55; this character is Botanist 49 — …" when every node of the item is above
+    /// this character's level, so none of them would show. Null when one is in reach, or when the
+    /// item is not from a node at all.
+    /// </summary>
+    string? LevelLock(uint itemId) => null;
+
+    /// <summary>
     /// For an item only timed nodes yield: zero when it can be gathered now, else the wait until it
     /// can. Null when the item is not timed-only — the ordinary <see cref="CanGather"/> applies.
     /// </summary>
@@ -115,6 +122,43 @@ public sealed class OwnGatherer : IOwnGatherer
     /// </summary>
     public Func<GatheringTarget, bool>? Workable { get; init; }
 
+    /// <summary>
+    /// The character's level on a class, 0 when it is not unlocked. Unset, every level is enough.
+    /// Not left to <see cref="Workable"/>'s best-there-is fallback: a node above the gatherer's
+    /// level is not shown at all, so a run for one walks its spots finding nothing. Rainbow Cotton
+    /// Boll did that, round Twinpools, for a Botanist 49.
+    /// </summary>
+    public Func<uint, int>? LevelOf { get; init; }
+
+    /// <summary>
+    /// Why every one of these nodes is beyond this character's level, or null when one is not.
+    /// The node's own level is the cutoff: the wiki has nodes showing up to four levels early, the
+    /// forums say four or five, and a run sent after a node that does not show walks its spots
+    /// finding nothing — so it waits until there is no doubt.
+    /// </summary>
+    private string? TooLow(IEnumerable<(uint ClassJobId, ushort Level)> nodes)
+    {
+        if (LevelOf is null)
+            return null;
+        var gathered = nodes.Where(n => n.ClassJobId is GatherReadiness.Miner or GatherReadiness.Botanist).ToList();
+        if (gathered.Count == 0 || gathered.Any(n => LevelOf(n.ClassJobId) >= n.Level))
+            return null;
+        var lowest = gathered.MinBy(n => n.Level);
+        var job = lowest.ClassJobId == GatherReadiness.Miner ? "Miner" : "Botanist";
+        var have = LevelOf(lowest.ClassJobId);
+        return have <= 0
+            ? $"needs {job}, which is not unlocked on this character"
+            : $"needs {job} {lowest.Level}; this character is {job} {have} — its nodes do not show below that";
+    }
+
+    /// <summary>Every node of the item there is somewhere to send a run to, timed or not.</summary>
+    private IEnumerable<(uint ClassJobId, ushort Level)> Placed(uint itemId)
+        => _source.PointsFor(itemId)
+            .Where(p => p.HasZone && _atlas.SpawnsOf(p.NodeId).Count > 0)
+            .Select(p => (p.ClassJobId, p.Level));
+
+    public string? LevelLock(uint itemId) => TooLow(Placed(itemId));
+
     /// <summary>The node to go for: the best one this character can work, else the best there is — and the run says why not.</summary>
     public GatheringTarget? Choose(uint itemId, uint territoryHint = 0, DateTime? now = null)
         => Choose(GatheringPlan.All(itemId, _source, _atlas, territoryHint, now));
@@ -156,6 +200,8 @@ public sealed class OwnGatherer : IOwnGatherer
 
     public string WhyNot(uint itemId, uint territoryHint = 0)
     {
+        if (TooLow(Placed(itemId)) is { } low)
+            return $"item {itemId} {low}";
         var points = _source.PointsFor(itemId);
         if (points.Count == 0)
             return $"the sheets name no gathering point for item {itemId}";
@@ -176,6 +222,11 @@ public sealed class OwnGatherer : IOwnGatherer
         if (targets.Count == 0)
         {
             _log($"Nothing in the node atlas yields item {itemId}.");
+            return false;
+        }
+        if (TooLow(targets.Select(t => (t.ClassJobId, t.Level))) is { } low)
+        {
+            _log($"Not gathering item {itemId}: it {low}.");
             return false;
         }
 

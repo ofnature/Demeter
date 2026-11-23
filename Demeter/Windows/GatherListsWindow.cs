@@ -194,12 +194,29 @@ public sealed class GatherListsWindow : DemeterWindow
                 if (current == item.ItemId)
                     ImGui.TableSetBgColor(ImGuiTableBgTarget.RowBg0, ImGui.ColorConvertFloat4ToU32(DemeterTheme.WakeWash));
 
+                // Too low a level for any of its nodes to show: locked, and skipped by a run, until the
+                // character gets there.
+                var locked = done ? null : _gatherer.LevelLock(item.ItemId);
+
                 ImGui.TableNextColumn();
-                ImGui.TextColored(done ? DemeterTheme.StatusGreen : DemeterTheme.TextDisabled, "●");
+                ImGui.BeginGroup();
+                if (locked is not null)
+                {
+                    ImGui.PushFont(UiBuilder.IconFont);
+                    ImGui.TextColored(DemeterTheme.StatusYellow, FontAwesomeIcon.Lock.ToIconString());
+                    ImGui.PopFont();
+                }
+                else
+                {
+                    ImGui.TextColored(done ? DemeterTheme.StatusGreen : DemeterTheme.TextDisabled, "●");
+                }
                 ImGui.SameLine(0f, 6f);
-                ImGui.TextColored(done ? DemeterTheme.TextDisabled : DemeterTheme.TextPrimary, _gatherables.NameOf(item.ItemId));
+                ImGui.TextColored(done || locked is not null ? DemeterTheme.TextDisabled : DemeterTheme.TextPrimary, _gatherables.NameOf(item.ItemId));
+                ImGui.EndGroup();
+                if (locked is not null && ImGui.IsItemHovered())
+                    ImGui.SetTooltip($"Locked: {locked}.\nA run skips it; it unlocks by itself at that level.");
                 // Timed nodes: when it is up, counted down in real time.
-                if (!done && _gatherer.Timer(item.ItemId, DateTime.UtcNow) is { Length: > 0 } timer)
+                if (!done && locked is null && _gatherer.Timer(item.ItemId, DateTime.UtcNow) is { Length: > 0 } timer)
                 {
                     ImGui.SameLine(0f, 8f);
                     ImGui.TextColored(timer.StartsWith("up", StringComparison.Ordinal) ? DemeterTheme.StatusGreen : DemeterTheme.StatusYellow, timer);

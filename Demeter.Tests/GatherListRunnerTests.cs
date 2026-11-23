@@ -18,6 +18,8 @@ public class GatherListRunnerTests
 
         public bool Enabled { get; set; } = true;
         public bool CanGather(uint itemId, uint territoryHint = 0) => !Unplaceable.Contains(itemId);
+        public Dictionary<uint, string> Locked { get; } = new();
+        public string? LevelLock(uint itemId) => Locked.GetValueOrDefault(itemId);
         public string WhyNot(uint itemId, uint territoryHint = 0) => "the sheets name no gathering point";
         public uint? ZoneOf(uint itemId) => Zones.TryGetValue(itemId, out var z) ? z : null;
         public string Where(uint itemId) => string.Empty;
@@ -251,6 +253,21 @@ public class GatherListRunnerTests
         var skipped = Assert.Single(runner.Outcomes, o => o.ItemId == 10);
         Assert.Contains("no gathering point", skipped.Note);
         Assert.Contains(log, m => m.Contains("skipped"));
+    }
+
+    [Fact]
+    public void An_item_above_the_characters_level_is_skipped_even_when_it_is_timed()
+    {
+        var (runner, own, log) = Make();
+        own.Locked[10] = "needs Botanist 55; this character is Botanist 49";
+        own.UpAt[10] = own.Now.AddHours(1);   // not waited for either: its node would not show
+
+        Assert.True(runner.Begin([List("l", (10, 2), (20, 2))]));
+        Run(runner);
+
+        Assert.Equal(GatherListRunState.Done, runner.State);
+        Assert.Equal([(20u, 2)], own.Starts);
+        Assert.Contains("needs Botanist 55", Assert.Single(runner.Outcomes, o => o.ItemId == 10).Note);
     }
 
     [Fact]

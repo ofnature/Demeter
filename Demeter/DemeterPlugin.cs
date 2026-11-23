@@ -117,6 +117,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
                 Enabled = _config.Enabled,
                 Workable = t => _game.LevelOfJob(t.ClassJobId) >= t.Level
                     && (t.TerritoryId == _game.TerritoryId || _game.RouteTo(t.TerritoryId, t.Spawns[0]) is not null),
+                LevelOf = _game.LevelOfJob,
             };
 
             // Fishing, phase 1: what is known about every fish, and when each can next be caught.

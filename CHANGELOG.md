@@ -1,6 +1,11 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.8 — 2026-11-22
+
+- An item whose nodes are all above the gatherer's level is locked in the gather lists: a lock in place of its dot, the name greyed, and on hover what it needs ("needs Botanist 55; this character is Botanist 49"). A run skips it, timed or not, and it unlocks by itself at that level. Nodes above your level do not show, so Rainbow Cotton Boll had a Botanist 49 going round Twinpools finding nothing
+- A request from another plugin for such an item is turned down with the same reason instead of setting off
+
 ## v0.1.7 — 2026-11-22
 
 - The Gather lists window can be minimized to an edge tab of its own, beside Demeter's: point at it to pop the lists out, click to pin, drag it to any edge, right-click to get the window back. Each tab keeps its own spot. "Add to Demeter" from a right-click menu leaves the lists in the tab when they live there
