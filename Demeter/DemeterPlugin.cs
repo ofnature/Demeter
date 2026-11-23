@@ -115,9 +115,10 @@ public sealed class DemeterPlugin : IDalamudPlugin
             var nodes = new OwnGatherer(new GatherRunner(gatherWorld, new Traveller(_game)), source, atlas, message => Say(message))
             {
                 Enabled = _config.Enabled,
-                Workable = t => _game.LevelOfJob(t.ClassJobId) >= t.Level
+                Workable = t => GatherReadiness.Shows(_game.LevelOfJob(t.ClassJobId), t.Level)
                     && (t.TerritoryId == _game.TerritoryId || _game.RouteTo(t.TerritoryId, t.Spawns[0]) is not null),
                 LevelOf = _game.LevelOfJob,
+                Unlocked = Unlocked,
             };
 
             // Fishing, phase 1: what is known about every fish, and when each can next be caught.
@@ -146,6 +147,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             var fisher = new FishGatherer(fish, spots, holes, _fishing, MemoryFor, _game.LevelOfJob, abilities.Knows)
             {
                 Enabled = _config.Enabled,
+                Unlocked = Unlocked,
             };
             _gatherer = new CompositeGatherer(nodes, fisher);
 
@@ -628,6 +630,10 @@ public sealed class DemeterPlugin : IDalamudPlugin
     }
 
     /// <summary>The lists window open or shut; from the edge tab, back to the window.</summary>
+    /// <summary>A folklore tome read, or a quest done: what a node or a fish waits on before it shows.</summary>
+    private bool Unlocked(Services.Gathering.GatheringUnlock unlock)
+        => unlock.IsFolklore ? _game.FolkloreRead(unlock.FolkloreClass, unlock.FolkloreIndex) : _game.UnlockDone(unlock.QuestId);
+
     private void ToggleLists()
     {
         if (_config.ListsMinimizedToTab)

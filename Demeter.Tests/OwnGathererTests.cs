@@ -203,13 +203,60 @@ public class OwnGathererTests : IDisposable
 
         Assert.False(own.Start(12597, 99, 0));
         Assert.False(own.Busy);
-        Assert.Contains(log, l => l.Contains("needs Botanist 55; this character is Botanist 49"));
-        Assert.Contains("needs Botanist 55", own.WhyNot(12597));
-        Assert.Equal("needs Botanist 55; this character is Botanist 49 — its nodes do not show below that", own.LevelLock(12597));
+        Assert.Contains(log, l => l.Contains("needs Botanist 51; this character is Botanist 49"));
+        Assert.Contains("needs Botanist 51", own.WhyNot(12597));
+        Assert.Equal("needs Botanist 51; this character is Botanist 49 — its level 55 nodes do not show below that", own.Lock(12597));
+
+        level = 52;                                                        // the roommate's Botanist, who works them
+        Assert.Null(own.Lock(12597));
+        Assert.True(own.Start(12597, 99, 0));
+    }
+
+    [Fact]
+    public void An_item_whose_nodes_wait_on_a_folklore_tome_is_locked_until_it_is_read()
+    {
+        // Frost Cotton Boll: Botanist 60 legendary nodes in Coerthas Western Highlands, shown only
+        // once the Coerthas botany tome is read.
+        var atlas = Atlas("""{ "33000": [ {"X":1,"Y":0,"Z":1} ] }""");
+        var source = new Source();
+        var tome = new GatheringUnlock(17, 0, 0, "Tome of Botanical Folklore - Coerthas");
+        source.Points[14154] = [new GatheringPointRef(33000, 397, 3, 60) { Unlock = tome }];
+        var world = new GatherWorldStub { TerritoryId = 129, CurrentClassJob = 34 };
+        var (level, read) = (60, false);
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(new FakeTravelWorld())), source, atlas, _ => { })
+        {
+            Enabled = true,
+            LevelOf = job => job == 17 ? level : 0,
+            Unlocked = u => u == tome && read,
+        };
+
+        Assert.Equal("needs the Tome of Botanical Folklore - Coerthas read — its nodes do not show without it", own.Lock(14154));
+        Assert.False(own.Start(14154, 5, 0));
 
         level = 55;
-        Assert.Null(own.LevelLock(12597));
-        Assert.True(own.Start(12597, 99, 0));
+        Assert.Equal("needs Botanist 56 and the Tome of Botanical Folklore - Coerthas read; this character is Botanist 55 — its nodes do not show without both",
+            own.Lock(14154));
+
+        (level, read) = (60, true);
+        Assert.Null(own.Lock(14154));
+        Assert.True(own.Start(14154, 5, 0));
+    }
+
+    [Fact]
+    public void An_item_whose_nodes_wait_on_a_quest_names_the_quest()
+    {
+        var atlas = Atlas("""{ "33631": [ {"X":1,"Y":0,"Z":1} ] }""");
+        var source = new Source();
+        source.Points[33010] = [new GatheringPointRef(33631, 397, 3, 55) { Unlock = new GatheringUnlock(0, 0, 67631, "Inscrutable Tastes") }];
+        var world = new GatherWorldStub { TerritoryId = 129, CurrentClassJob = 34 };
+        var own = new OwnGatherer(new GatherRunner(world, new Traveller(new FakeTravelWorld())), source, atlas, _ => { })
+        {
+            Enabled = true,
+            LevelOf = _ => 90,
+            Unlocked = _ => false,
+        };
+
+        Assert.Equal("needs the quest \"Inscrutable Tastes\" done — its nodes do not show without it", own.Lock(33010));
     }
 
     [Fact]

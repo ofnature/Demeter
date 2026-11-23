@@ -25,6 +25,49 @@ public sealed record GatheringOrigin(string Job, int Level, string Place, string
     }
 }
 
+/// <summary>
+/// What a node waits on before the game shows it at all: a folklore tome read (the legendary
+/// nodes), or a quest done (the rarefied collectables wait on "Inscrutable Tastes", the
+/// Oddly Specific and Connoisseur's items on their own quests). From <c>GatheringSubCategory</c>.
+/// </summary>
+/// <param name="FolkloreClass">The class whose tome it is — Miner, Botanist or Fisher. Zero for a quest.</param>
+/// <param name="FolkloreIndex">
+/// The tome's bit in that class's read-tomes array in <c>PlayerState</c>: the sub-category's
+/// <c>Quest</c> column, which holds 0–11 for a tome rather than a quest. Not the <c>Division</c>
+/// that <c>IsFolkloreBookUnlocked</c> takes: the Northern tomes share one across all three
+/// classes, and the Heavensward to Shadowbringers fishing tomes have none.
+/// </param>
+/// <param name="QuestId">The quest's row, zero for a tome.</param>
+/// <param name="Name">The tome's or the quest's name.</param>
+public sealed record GatheringUnlock(uint FolkloreClass, uint FolkloreIndex, uint QuestId, string Name)
+{
+    public bool IsFolklore => FolkloreClass != 0;
+
+    public string Describe() => IsFolklore ? $"the {Name} read" : $"the quest \"{Name}\" done";
+
+    /// <summary>
+    /// The tome or quest a sub-category waits on. One with a tome item is folklore; otherwise a
+    /// quest row (0x10000 and up) is one to have done. Null for one that waits on nothing.
+    /// </summary>
+    public static GatheringUnlock? Of(GatheringSubCategory? sub)
+    {
+        try
+        {
+            if (sub is not { } s)
+                return null;
+            if (s.Item.RowId != 0 && s.ClassJob.RowId != 0)
+                return new GatheringUnlock(s.ClassJob.RowId, s.Quest.RowId, 0, s.Item.ValueNullable?.Name.ExtractText() ?? s.FolkloreBook.ExtractText());
+            if (s.Quest.RowId >= 0x10000)
+                return new GatheringUnlock(0, 0, s.Quest.RowId, s.Quest.ValueNullable?.Name.ExtractText() ?? $"quest {s.Quest.RowId}");
+        }
+        catch
+        {
+            // a sheet we cannot read is not grounds for locking anything
+        }
+        return null;
+    }
+}
+
 /// <summary>One gathering point: what to walk to, in which zone, as which class.</summary>
 /// <param name="NodeId">The <c>GatheringPoint</c> row — also the object's data id.</param>
 /// <param name="TerritoryId">Zero or one both mean the sheet does not say.</param>
@@ -44,6 +87,9 @@ public sealed record GatheringPointRef(uint NodeId, uint TerritoryId, uint Gathe
 
     /// <summary>The sheet leaves a placeholder row behind for points it does not place.</summary>
     public bool HasZone => TerritoryId > 1;
+
+    /// <summary>A folklore tome or quest the node waits on, or null for one anyone can see.</summary>
+    public GatheringUnlock? Unlock { get; init; }
 
     public uint ClassJobId => GatheringType switch { 0 or 1 => 16u, 2 or 3 => 17u, _ => 18u };
 }
@@ -154,6 +200,13 @@ public sealed class GatheringSource : IGatheringSource
         }
     }
 
+    /// <summary>The tome or quest the point waits on.</summary>
+    private static GatheringUnlock? UnlockOf(GatheringPoint point)
+    {
+        try { return GatheringUnlock.Of(point.GatheringSubCategory.ValueNullable); }
+        catch { return null; }
+    }
+
     /// <summary>What <c>EphemeralStartTime</c> holds when there is no window at all.</summary>
     private const ushort NoWindow = 65535;
 
@@ -243,7 +296,7 @@ public sealed class GatheringSource : IGatheringSource
                     var b = p.GatheringPointBase.ValueNullable;
                     points.Add(new GatheringPointRef(
                         p.RowId, p.TerritoryType.RowId, b?.GatheringType.RowId ?? 99, (ushort)(b?.GatheringLevel ?? 0))
-                        { Timed = IsTimed(p.RowId), Windows = WindowsOf(p.RowId) });
+                        { Timed = IsTimed(p.RowId), Windows = WindowsOf(p.RowId), Unlock = UnlockOf(p) });
                 }
 
             // Quest-hidden items are not in the base's item slots at all — GatheringItemPoint is
@@ -263,7 +316,7 @@ public sealed class GatheringSource : IGatheringSource
                         var b = point.GatheringPointBase.ValueNullable;
                         points.Add(new GatheringPointRef(
                             point.RowId, point.TerritoryType.RowId, b?.GatheringType.RowId ?? 99, (ushort)(b?.GatheringLevel ?? 0))
-                            { Timed = IsTimed(point.RowId), Windows = WindowsOf(point.RowId) });
+                            { Timed = IsTimed(point.RowId), Windows = WindowsOf(point.RowId), Unlock = UnlockOf(point) });
                     }
                 }
             }

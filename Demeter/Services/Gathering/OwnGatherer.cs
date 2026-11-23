@@ -44,11 +44,11 @@ public interface IOwnGatherer
     string Timer(uint itemId, DateTime utc) => string.Empty;
 
     /// <summary>
-    /// "needs Botanist 55; this character is Botanist 49 — …" when every node of the item is above
-    /// this character's level, so none of them would show. Null when one is in reach, or when the
-    /// item is not from a node at all.
+    /// "needs Botanist 55; this character is Botanist 49 — …" when no node of the item would show
+    /// to this character: all above its level, or waiting on a folklore tome or quest it has not
+    /// done. Null when one is in reach, or when the item is not from a node at all.
     /// </summary>
-    string? LevelLock(uint itemId) => null;
+    string? Lock(uint itemId) => null;
 
     /// <summary>
     /// For an item only timed nodes yield: zero when it can be gathered now, else the wait until it
@@ -131,33 +131,55 @@ public sealed class OwnGatherer : IOwnGatherer
     public Func<uint, int>? LevelOf { get; init; }
 
     /// <summary>
-    /// Why every one of these nodes is beyond this character's level, or null when one is not.
-    /// The node's own level is the cutoff: the wiki has nodes showing up to four levels early, the
-    /// forums say four or five, and a run sent after a node that does not show walks its spots
-    /// finding nothing — so it waits until there is no doubt.
+    /// Whether a folklore tome is read or a quest done, for the nodes that wait on one — the
+    /// game does not show them before. Unset, every one is.
     /// </summary>
-    private string? TooLow(IEnumerable<(uint ClassJobId, ushort Level)> nodes)
+    public Func<GatheringUnlock, bool>? Unlocked { get; init; }
+
+    /// <summary>
+    /// Why none of these nodes would show to this character, or null when one would: too low for
+    /// it (<see cref="GatherReadiness.Shows"/>, four levels short of the node at most), or a tome
+    /// or quest it waits on not done.
+    /// </summary>
+    private string? Locked(IEnumerable<(uint ClassJobId, ushort Level, GatheringUnlock? Unlock)> nodes)
     {
-        if (LevelOf is null)
+        if (LevelOf is null && Unlocked is null)
             return null;
         var gathered = nodes.Where(n => n.ClassJobId is GatherReadiness.Miner or GatherReadiness.Botanist).ToList();
-        if (gathered.Count == 0 || gathered.Any(n => LevelOf(n.ClassJobId) >= n.Level))
+        if (gathered.Count == 0)
             return null;
-        var lowest = gathered.MinBy(n => n.Level);
-        var job = lowest.ClassJobId == GatherReadiness.Miner ? "Miner" : "Botanist";
-        var have = LevelOf(lowest.ClassJobId);
-        return have <= 0
-            ? $"needs {job}, which is not unlocked on this character"
-            : $"needs {job} {lowest.Level}; this character is {job} {have} — its nodes do not show below that";
+        int Have(uint job) => LevelOf?.Invoke(job) ?? int.MaxValue;
+        bool LevelOk((uint ClassJobId, ushort Level, GatheringUnlock? Unlock) n) => GatherReadiness.Shows(Have(n.ClassJobId), n.Level);
+        bool Done((uint ClassJobId, ushort Level, GatheringUnlock? Unlock) n) => n.Unlock is null || (Unlocked?.Invoke(n.Unlock) ?? true);
+        if (gathered.Any(n => LevelOk(n) && Done(n)))
+            return null;
+
+        // The node nearest to showing: the fewest things missing, then the lowest level.
+        var nearest = gathered.OrderBy(n => (LevelOk(n) ? 0 : 1) + (Done(n) ? 0 : 1)).ThenBy(n => n.Level).First();
+        var job = nearest.ClassJobId == GatherReadiness.Miner ? "Miner" : "Botanist";
+        var have = Have(nearest.ClassJobId);
+        if (!LevelOk(nearest) && have <= 0)
+            return $"needs {job}, which is not unlocked on this character";
+        var needs = new List<string>();
+        if (!LevelOk(nearest))
+            needs.Add($"{job} {GatherReadiness.ShowsFrom(nearest.Level)}");
+        if (!Done(nearest))
+            needs.Add(nearest.Unlock!.Describe());
+        var text = $"needs {string.Join(" and ", needs)}";
+        if (!LevelOk(nearest))
+            text += $"; this character is {job} {have}";
+        return text + (needs.Count > 1 ? " — its nodes do not show without both"
+            : LevelOk(nearest) ? " — its nodes do not show without it"
+            : $" — its level {nearest.Level} nodes do not show below that");
     }
 
     /// <summary>Every node of the item there is somewhere to send a run to, timed or not.</summary>
-    private IEnumerable<(uint ClassJobId, ushort Level)> Placed(uint itemId)
+    private IEnumerable<(uint ClassJobId, ushort Level, GatheringUnlock? Unlock)> Placed(uint itemId)
         => _source.PointsFor(itemId)
             .Where(p => p.HasZone && _atlas.SpawnsOf(p.NodeId).Count > 0)
-            .Select(p => (p.ClassJobId, p.Level));
+            .Select(p => (p.ClassJobId, p.Level, p.Unlock));
 
-    public string? LevelLock(uint itemId) => TooLow(Placed(itemId));
+    public string? Lock(uint itemId) => Locked(Placed(itemId));
 
     /// <summary>The node to go for: the best one this character can work, else the best there is — and the run says why not.</summary>
     public GatheringTarget? Choose(uint itemId, uint territoryHint = 0, DateTime? now = null)
@@ -200,8 +222,8 @@ public sealed class OwnGatherer : IOwnGatherer
 
     public string WhyNot(uint itemId, uint territoryHint = 0)
     {
-        if (TooLow(Placed(itemId)) is { } low)
-            return $"item {itemId} {low}";
+        if (Locked(Placed(itemId)) is { } locked)
+            return $"item {itemId} {locked}";
         var points = _source.PointsFor(itemId);
         if (points.Count == 0)
             return $"the sheets name no gathering point for item {itemId}";
@@ -224,9 +246,9 @@ public sealed class OwnGatherer : IOwnGatherer
             _log($"Nothing in the node atlas yields item {itemId}.");
             return false;
         }
-        if (TooLow(targets.Select(t => (t.ClassJobId, t.Level))) is { } low)
+        if (Locked(targets.Select(t => (t.ClassJobId, t.Level, t.Unlock))) is { } locked)
         {
-            _log($"Not gathering item {itemId}: it {low}.");
+            _log($"Not gathering item {itemId}: it {locked}.");
             return false;
         }
 

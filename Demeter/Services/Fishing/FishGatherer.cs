@@ -56,6 +56,43 @@ public sealed class FishGatherer : IOwnGatherer
 
     public bool Enabled { get; set; } = true;
 
+    /// <summary>Whether a folklore tome is read. Unset, every one is.</summary>
+    public Func<GatheringUnlock, bool>? Unlocked { get; init; }
+
+    /// <summary>The tome the fish waits on and this character has not read, or null.</summary>
+    private GatheringUnlock? Unread(uint itemId)
+        => _places.FolkloreOf(itemId) is { } tome && !(Unlocked?.Invoke(tome) ?? true) ? tome : null;
+
+    /// <summary>
+    /// Locked on the gather lists: every hole above the Fisher's level, or a folklore tome not read.
+    /// Spearfishing and ocean catches are not the fisher's yet, and say so as a skip instead.
+    /// </summary>
+    public string? Lock(uint itemId)
+    {
+        if (_fish.ById(itemId) is not { } fish || fish.IsSpearfish || fish.IsOcean)
+            return null;
+        var holes = _places.HolesFor(itemId);
+        var fisher = _levelOf(HoleApproach.Fisher);
+        var lowest = holes.Count == 0 ? 0 : holes.Min(h => h.Level);
+        var levelShort = holes.Count > 0 && lowest > fisher;
+        var tome = Unread(itemId);
+        if (!levelShort && tome is null)
+            return null;
+        if (levelShort && fisher <= 0)
+            return "needs Fisher, which is not unlocked on this character";
+        var needs = new List<string>();
+        if (levelShort)
+            needs.Add($"Fisher {lowest}");
+        if (tome is not null)
+            needs.Add(tome.Describe());
+        var text = $"needs {string.Join(" and ", needs)}";
+        if (levelShort)
+            text += $"; this character is Fisher {fisher}";
+        return text + (needs.Count > 1 ? " — it cannot be caught without both"
+            : levelShort ? " — its holes cannot be fished below that"
+            : " — it does not bite without it");
+    }
+
     /// <summary>This item is a fish the catalogue knows — the fisher's to answer for, yes or no.</summary>
     public bool Handles(uint itemId) => _fish.ById(itemId) is not null;
 
@@ -73,6 +110,8 @@ public sealed class FishGatherer : IOwnGatherer
             return $"{name} is spearfished — not done yet";
         if (fish.IsOcean)
             return $"{name} is an ocean fishing catch — not done yet";
+        if (Unread(itemId) is { } tome)
+            return $"{name} needs {tome.Describe()} — it does not bite without it";
         if (fish.Path is not { Count: > 0 })
             return $"the fish data names no bait for {name}";
         if ((fish.Path.Count > 1 || fish.Predators?.Any(p => _fish.ById((uint)p[0])?.Path is { Count: > 1 }) == true) && !_knows(FishingRun.Mooch))
@@ -238,7 +277,7 @@ public sealed class CompositeGatherer : IOwnGatherer
     public uint? ZoneOf(uint itemId) => For(itemId).ZoneOf(itemId);
     public string Where(uint itemId) => For(itemId).Where(itemId);
     public string Timer(uint itemId, DateTime utc) => For(itemId).Timer(itemId, utc);
-    public string? LevelLock(uint itemId) => For(itemId).LevelLock(itemId);
+    public string? Lock(uint itemId) => For(itemId).Lock(itemId);
     public TimeSpan? WaitFor(uint itemId, DateTime utc) => For(itemId).WaitFor(itemId, utc);
     public TimeSpan? UpFor(uint itemId, DateTime utc) => For(itemId).UpFor(itemId, utc);
 

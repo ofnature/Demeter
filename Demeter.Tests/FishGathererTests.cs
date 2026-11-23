@@ -22,6 +22,8 @@ public class FishGathererTests
         public IReadOnlyList<FishingHole> HolesFor(uint fishItemId) => Holes.GetValueOrDefault(fishItemId) ?? [];
         public IReadOnlyList<(uint Weather, int Cumulative)> RatesFor(uint territoryId) => Rates.GetValueOrDefault(territoryId) ?? [(1u, 100)];
         public string ItemName(uint id) => $"item {id}";
+        public Dictionary<uint, GatheringUnlock> Tomes { get; } = new();
+        public GatheringUnlock? FolkloreOf(uint fishItemId) => Tomes.GetValueOrDefault(fishItemId);
     }
 
     /// <summary>Enough game for a run to begin: idle, Fisher on, travel that arrives.</summary>
@@ -70,7 +72,7 @@ public class FishGathererTests
     private static FishInfo Fish(uint id, params uint[] path) => new() { Id = id, Name = $"fish {id}", Bite = "Weak", Path = [.. path] };
 
     private static (FishGatherer Fisher, Places Places, FishingRun Run, Nowhere Travel) Make(int fisherLevel = 100, bool mooch = true,
-        Dictionary<uint, HoleMemory>? memory = null)
+        Dictionary<uint, HoleMemory>? memory = null, Func<GatheringUnlock, bool>? unlocked = null)
     {
         var catalog = new FishCatalog([
             Fish(Always, Bait),
@@ -92,7 +94,10 @@ public class FishGathererTests
         memory ??= new();
         var fisher = new FishGatherer(catalog, places, holes, run,
             id => memory.TryGetValue(id, out var m) ? m : memory[id] = new HoleMemory(),
-            job => job == HoleApproach.Fisher ? fisherLevel : 0, id => id != FishingRun.Mooch || mooch, () => Now);
+            job => job == HoleApproach.Fisher ? fisherLevel : 0, id => id != FishingRun.Mooch || mooch, () => Now)
+        {
+            Unlocked = unlocked,
+        };
         return (fisher, places, run, travel);
     }
 
@@ -146,6 +151,34 @@ public class FishGathererTests
         places.Holes[Always] = [Deep];
         Assert.False(fisher.CanGather(Always));
         Assert.Contains("Fisher Lv 90", fisher.WhyNot(Always));
+    }
+
+    [Fact]
+    public void A_fish_that_waits_on_a_folklore_tome_is_locked_until_it_is_read()
+    {
+        var tome = new GatheringUnlock(18, 0, 0, "Tome of Ichthyological Folklore - Coerthas");
+        var read = false;
+        var (fisher, places, _, _) = Make(unlocked: u => u == tome && read);
+        places.Tomes[Always] = tome;
+
+        Assert.Equal("needs the Tome of Ichthyological Folklore - Coerthas read — it does not bite without it", fisher.Lock(Always));
+        Assert.False(fisher.CanGather(Always));
+        Assert.False(fisher.Start(Always, 1, 0));
+
+        read = true;
+        Assert.Null(fisher.Lock(Always));
+        Assert.True(fisher.CanGather(Always));
+    }
+
+    [Fact]
+    public void A_fish_whose_holes_are_all_above_the_Fisher_level_is_locked()
+    {
+        var (fisher, places, _, _) = Make(fisherLevel: 50);
+        places.Holes[Always] = [Deep];
+        Assert.Equal("needs Fisher 90; this character is Fisher 50 — its holes cannot be fished below that", fisher.Lock(Always));
+
+        places.Holes[Always] = [Deep, River];
+        Assert.Null(fisher.Lock(Always));                                  // the river is in reach
     }
 
     [Fact]

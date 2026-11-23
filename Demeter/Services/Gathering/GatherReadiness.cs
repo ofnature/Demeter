@@ -25,6 +25,19 @@ public static class GatherReadiness
     public const uint Fisher = 18;
 
     /// <summary>
+    /// How far below its own level a node already shows. The wiki has a Botanist 21 finding level
+    /// 25 nodes; in the field a Botanist 52 worked Rainbow Cotton Boll's level 55 nodes and a
+    /// Botanist 49 never saw them.
+    /// </summary>
+    public const int ShowsBelow = 4;
+
+    /// <summary>The class level a node of this level shows from.</summary>
+    public static int ShowsFrom(int nodeLevel) => Math.Max(1, nodeLevel - ShowsBelow);
+
+    /// <summary>A node of this level shows to a gatherer of that one.</summary>
+    public static bool Shows(int have, int nodeLevel) => have >= ShowsFrom(nodeLevel);
+
+    /// <summary>
     /// Why this character cannot gather the target unattended, or null when it can.
     /// </summary>
     /// <param name="target">The chosen node, or null when the sheets name none we can use.</param>
@@ -48,8 +61,8 @@ public static class GatherReadiness
         var have = levelOf(target.ClassJobId);
         if (have <= 0)
             return $"{name} needs {job}, which is not unlocked on this character";
-        if (have < target.Level)
-            return $"{name} needs {job} {target.Level}; this character is {job} {have}";
+        if (!Shows(have, target.Level))
+            return $"{name} needs {job} {ShowsFrom(target.Level)} for its level {target.Level} nodes; this character is {job} {have}";
 
         return null;
     }

@@ -8,8 +8,10 @@ namespace Demeter.Services.Gathering;
 /// <summary>Where to go, as what, to gather one item.</summary>
 /// <param name="Spawns">Every spot the node appears at, in the order they should be tried.</param>
 /// <param name="Timed">An unspoiled or ephemeral node: one node, up only in its window, gone once worked.</param>
+/// <param name="Unlock">A folklore tome or quest the node waits on before it shows.</param>
 public sealed record GatheringTarget(
-    uint ItemId, uint NodeId, uint TerritoryId, uint ClassJobId, ushort Level, IReadOnlyList<Vector3> Spawns, bool Timed = false);
+    uint ItemId, uint NodeId, uint TerritoryId, uint ClassJobId, ushort Level, IReadOnlyList<Vector3> Spawns, bool Timed = false,
+    GatheringUnlock? Unlock = null);
 
 /// <summary>
 /// Turns "I need this item" into "stand here, as this class".
@@ -54,7 +56,7 @@ public static class GatheringPlan
             var spawns = atlas.SpawnsOf(point.NodeId);
             if (spawns.Count == 0)
                 continue;
-            targets.Add(new GatheringTarget(itemId, point.NodeId, territory, point.ClassJobId, point.Level, spawns, point.Timed));
+            targets.Add(new GatheringTarget(itemId, point.NodeId, territory, point.ClassJobId, point.Level, spawns, point.Timed, point.Unlock));
         }
 
         return targets

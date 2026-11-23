@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dalamud.Plugin.Services;
+using Demeter.Services.Gathering;
 using Lumina.Excel.Sheets;
 
 namespace Demeter.Services.Fishing;
@@ -15,6 +16,9 @@ public interface IFishPlaces
     IReadOnlyList<FishingHole> HolesFor(uint fishItemId);
     IReadOnlyList<(uint Weather, int Cumulative)> RatesFor(uint territoryId);
     string ItemName(uint id);
+
+    /// <summary>The folklore tome the fish waits on (<c>FishParameter.GatheringSubCategory</c>), or null.</summary>
+    GatheringUnlock? FolkloreOf(uint fishItemId) => null;
 }
 
 /// <summary>
@@ -28,6 +32,7 @@ public sealed class FishSpots : IFishPlaces
     private readonly Dictionary<uint, IReadOnlyList<(uint Weather, int Cumulative)>> _ratesByTerritory = new();
     private readonly Dictionary<uint, string> _weatherNames = new();
     private readonly Dictionary<uint, string> _itemNames = new();
+    private readonly Dictionary<uint, GatheringUnlock> _tomes = new();
 
     public FishSpots(IDataManager data, Action<string>? log = null)
     {
@@ -65,12 +70,26 @@ public sealed class FishSpots : IFishPlaces
             log?.Invoke($"Reading the fishing spots failed ({ex.GetType().Name}: {ex.Message}).");
         }
 
+        // The big fish of each region bite only once its tome is read: 296 of them.
+        try
+        {
+            foreach (var p in data.GetExcelSheet<FishParameter>())
+                if (p.Item.RowId != 0 && GatheringUnlock.Of(p.GatheringSubCategory.ValueNullable) is { IsFolklore: true } tome)
+                    _tomes[p.Item.RowId] = tome;
+        }
+        catch (Exception ex)
+        {
+            log?.Invoke($"Reading the fishing folklore failed ({ex.GetType().Name}: {ex.Message}).");
+        }
+
         _items = data;
     }
 
     private readonly IDataManager _items;
 
     public IReadOnlyList<FishingHole> HolesFor(uint fishItemId) => _holesByFish.GetValueOrDefault(fishItemId) ?? [];
+
+    public GatheringUnlock? FolkloreOf(uint fishItemId) => _tomes.GetValueOrDefault(fishItemId);
 
     public IReadOnlyList<(uint Weather, int Cumulative)> RatesFor(uint territoryId)
         => _ratesByTerritory.GetValueOrDefault(territoryId) ?? [];

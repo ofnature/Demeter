@@ -324,6 +324,33 @@ public sealed unsafe class GameBasics : ITravelWorld, IRepairWorld, IAbilityStat
     /// written into one, is done. Readable from any job. Unreadable is answered yes — the game
     /// refusing the action is a better way to learn it than refusing work on a bad read.
     /// </summary>
+    /// <summary>
+    /// A folklore tome is read: its bit in the class's read-tomes array. Unreadable is answered
+    /// yes, as <see cref="UnlockDone"/> is: a lock on a bad read stops work that would have gone.
+    /// </summary>
+    public bool FolkloreRead(uint classJobId, uint index)
+    {
+        try
+        {
+            var state = PlayerState.Instance();
+            if (state == null)
+                return true;
+            var bits = classJobId switch
+            {
+                16 => state->UnlockedMinerFolkloreTomes,
+                17 => state->UnlockedBotanistFolkloreTomes,
+                18 => state->UnlockedFishingFolkloreTomes,
+                _ => default,
+            };
+            var at = (int)(index >> 3);
+            return at >= bits.Length || (bits[at] & (1 << (int)(index & 7))) != 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
     public bool UnlockDone(uint unlockLink)
     {
         if (unlockLink == 0)

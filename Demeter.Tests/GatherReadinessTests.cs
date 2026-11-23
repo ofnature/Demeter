@@ -28,9 +28,16 @@ public class GatherReadinessTests
     {
         var why = GatherReadiness.WhyNot(Node(GatherReadiness.Miner, 90), Levels(miner: 54), "Copper Ore");
         Assert.NotNull(why);
-        Assert.Contains("Miner 90", why);
+        Assert.Contains("Miner 86", why);                                  // a node shows four levels early
         Assert.Contains("Miner 54", why);
     }
+
+    [Theory]
+    [InlineData(49, false)]   // Rainbow Cotton Boll's level 55 nodes: not there for a Botanist 49
+    [InlineData(51, true)]
+    [InlineData(52, true)]    // and worked by a Botanist 52
+    public void A_node_shows_from_four_levels_below_its_own(int botanist, bool shows)
+        => Assert.Equal(shows, GatherReadiness.CanGather(Node(GatherReadiness.Botanist, 55), Levels(botanist: botanist)));
 
     [Fact]
     public void A_class_that_is_not_unlocked_is_a_no_that_says_so()

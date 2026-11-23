@@ -308,8 +308,9 @@ public sealed class GatherListRunner
                 Record(item, target, held, "already held");
                 continue;
             }
-            // Its nodes do not show at this level, in a window or out of one.
-            if (_gatherer.LevelLock(item) is { } locked)
+            // Its nodes do not show to this character — the level, or a folklore tome or quest —
+            // in a window or out of one.
+            if (_gatherer.Lock(item) is { } locked)
             {
                 Record(item, target, held, $"skipped: {locked}");
                 continue;

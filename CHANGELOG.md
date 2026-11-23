@@ -1,6 +1,12 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.9 — 2026-11-22
+
+- A node counts as showing from four levels below its own: a Botanist 52 works Rainbow Cotton Boll's level 55 nodes, which v0.1.8 locked until 55. A Botanist 49 still does not see them
+- Items whose nodes wait on a folklore tome (the legendary nodes, 116 items) or a quest (the Rarefied collectables on "Inscrutable Tastes", and the Oddly Specific, Oddly Delicate and Connoisseur's items on theirs) are locked in the gather lists until the tome is read or the quest done, and the lock says which
+- Fish lock the same way: the 296 that bite only once their region's Tome of Ichthyological Folklore is read, and any fish whose holes are all above the Fisher's level
+
 ## v0.1.8 — 2026-11-22
 
 - An item whose nodes are all above the gatherer's level is locked in the gather lists: a lock in place of its dot, the name greyed, and on hover what it needs ("needs Botanist 55; this character is Botanist 49"). A run skips it, timed or not, and it unlocks by itself at that level. Nodes above your level do not show, so Rainbow Cotton Boll had a Botanist 49 going round Twinpools finding nothing

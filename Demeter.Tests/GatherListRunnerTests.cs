@@ -19,7 +19,7 @@ public class GatherListRunnerTests
         public bool Enabled { get; set; } = true;
         public bool CanGather(uint itemId, uint territoryHint = 0) => !Unplaceable.Contains(itemId);
         public Dictionary<uint, string> Locked { get; } = new();
-        public string? LevelLock(uint itemId) => Locked.GetValueOrDefault(itemId);
+        public string? Lock(uint itemId) => Locked.GetValueOrDefault(itemId);
         public string WhyNot(uint itemId, uint territoryHint = 0) => "the sheets name no gathering point";
         public uint? ZoneOf(uint itemId) => Zones.TryGetValue(itemId, out var z) ? z : null;
         public string Where(uint itemId) => string.Empty;
