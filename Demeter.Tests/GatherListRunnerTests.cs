@@ -104,6 +104,20 @@ public class GatherListRunnerTests
         Assert.All(runner.Outcomes, o => Assert.True(o.Reached));
     }
 
+    [Fact]
+    public void The_log_says_which_lists_started_and_what_is_waited_for_once()
+    {
+        var (runner, own, log) = Make();
+        own.UpAt[7763] = own.Now.AddMinutes(10);
+
+        Assert.True(runner.Begin([List("tea", (7763, 3))], " from the Gather button"));
+        Run(runner, 20);
+
+        Assert.Contains("Gather lists: started from the Gather button — \"tea\": 1 item(s) short.", log);
+        Assert.Single(log, l => l.StartsWith("Gather lists: Waiting for item 7763 — its node is up in 10:00"));
+        Assert.Equal(["tea"], runner.ListNames);
+    }
+
     /// <summary>
     /// The window opens while an ordinary item is being gathered: the node in hand is finished, the
     /// timed one is gathered while it is up, and the ordinary item is taken up again after.

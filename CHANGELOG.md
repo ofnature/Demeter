@@ -1,6 +1,12 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.11 — 2026-11-23
+
+- A gather list run that Demeter unloading cut off (a plugin update, a reload, or the game closing) is picked up again once the same character is back and free, within ten minutes. One another plugin asked for, or one asked to stop after its node, is not. Updating to this version is the last update that still stops a run
+- The log says when a list run starts, which lists and from where, and once what it is waiting for and how long
+- The log has a line whenever a timed item on any list has its node come up, with what Demeter is doing then (running, waiting, fishing, or not running)
+
 ## v0.1.10 — 2026-11-23
 
 - A node is gathered out before it is left. Once enough is in the bag, a timed node goes on giving its item to the end (then its Dark Matter Cluster, crystals or anything else on it); an ordinary node's remaining gathers go on its best cluster, crystal or shard row, or on the item where it has none; a collectable node is worked until its integrity is spent. A timed node left with gathers on it stopped behind the game's "leave this node?" prompt

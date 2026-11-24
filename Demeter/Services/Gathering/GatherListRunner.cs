@@ -86,15 +86,26 @@ public sealed class GatherListRunner
     public uint? CurrentItem => _current?.ItemId;
     public int Remaining => _queue.Count + (_current is null ? 0 : 1);
 
-    /// <summary>Snapshot the short items of the enabled lists and start. False when nothing is short.</summary>
-    public bool Begin(IEnumerable<GatherList> lists)
+    /// <summary>The lists the run in hand was started on, by name.</summary>
+    public IReadOnlyList<string> ListNames { get; private set; } = [];
+
+    /// <summary>The timed item the run last said it was waiting for, so it is said once a wait.</summary>
+    private uint _waitSaidFor;
+
+    /// <summary>
+    /// Snapshot the short items of the enabled lists and start. False when nothing is short.
+    /// <paramref name="how"/> is for the log: " from the Gather button", say.
+    /// </summary>
+    public bool Begin(IEnumerable<GatherList> lists, string how = "")
     {
         // One entry per item at the highest target any list asks for.
         var wanted = new Dictionary<uint, int>();
+        var names = new List<string>();
         foreach (var list in lists)
         {
             if (!list.Enabled)
                 continue;
+            names.Add(list.Name);
             foreach (var item in list.Items)
                 if (item.TargetCount > 0)
                     wanted[item.ItemId] = Math.Max(wanted.GetValueOrDefault(item.ItemId), item.TargetCount);
@@ -111,13 +122,15 @@ public sealed class GatherListRunner
         _outcomes.Clear();
         _timedTries.Clear();
         _current = null;
+        _waitSaidFor = 0;
+        ListNames = names;
         StopAfterRunRequested = false;
         // Zone order, unknown zones last; stable within a zone so the list's own order holds.
         foreach (var kv in shortItems.OrderBy(kv => _gatherer.ZoneOf(kv.Key) ?? uint.MaxValue))
             _queue.Enqueue((kv.Key, kv.Value));
         State = GatherListRunState.Running;
         Status = $"{_queue.Count} item(s) short.";
-        _log($"Gather lists: {_queue.Count} item(s) short.");
+        _log($"Gather lists: started{how} — {string.Join(", ", names.Select(n => $"\"{n}\""))}: {_queue.Count} item(s) short.");
         return true;
     }
 
@@ -336,6 +349,7 @@ public sealed class GatherListRunner
                 continue;
             }
             _current = (item, target);
+            _waitSaidFor = 0;
             Status = $"{name} {held}/{target}";
             _log($"Gathering {target - held} × {name} ({held}/{target}){(wait is not null ? " — its timed node is up" : string.Empty)}.");
             foreach (var (waitItem, waitTarget, _) in waiting) _queue.Enqueue((waitItem, waitTarget));
@@ -349,6 +363,11 @@ public sealed class GatherListRunner
             var span = soonest.Wait;
             Status = $"Waiting for {_nameOf(soonest.ItemId)} — its node is up in " +
                      (span.TotalHours >= 1 ? $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}" : $"{span.Minutes}:{span.Seconds:00}");
+            if (_waitSaidFor != soonest.ItemId)
+            {
+                _waitSaidFor = soonest.ItemId;
+                _log($"Gather lists: {Status}.");
+            }
             return;
         }
 

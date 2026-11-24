@@ -29,6 +29,9 @@ public sealed class DemeterConfig : IPluginConfiguration
     /// <summary>The master switch. Off, nothing runs — not the lists, not a request from another plugin.</summary>
     public bool Enabled { get; set; } = true;
 
+    /// <summary>A gather list run that Demeter unloading cut off, to be picked up when it is back.</summary>
+    public ListResume? ResumeLists { get; set; }
+
     /// <summary>The gather lists, in the order they are shown. Another plugin's request is a list of its own, named for it.</summary>
     public List<GatherList> GatherLists { get; set; } = [];
 
@@ -82,4 +85,16 @@ public enum DemeterMode
 {
     Gathering = 0,
     OceanFishing = 1,
+}
+
+/// <summary>
+/// A list run cut off by Demeter unloading — an update, a reload. Picked up again for the same
+/// character, once it is free, within <see cref="DemeterPlugin.ResumeWithin"/> of being cut off.
+/// </summary>
+[Serializable]
+public sealed class ListResume
+{
+    public List<string> Lists { get; set; } = [];
+    public ulong ContentId { get; set; }
+    public DateTime SavedUtc { get; set; }
 }

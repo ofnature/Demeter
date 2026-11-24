@@ -300,7 +300,7 @@ public sealed class GatherListsWindow : DemeterWindow
             {
                 if (DemeterTheme.IconTextButton(FontAwesomeIcon.Play, "Gather", DemeterTheme.GreenDark,
                         $"Gather everything short on \"{shown?.Name}\", zone by zone — this list only.") && canRunShown)
-                    runner.Begin([new GatherList { Name = shown!.Name, Enabled = true, Items = shown.Items }]);
+                    runner.Begin([new GatherList { Name = shown!.Name, Enabled = true, Items = shown.Items }], " from the Gather button");
             }
             if (ImGui.IsItemHovered() && !canRunShown)
                 ImGui.SetTooltip(!_config.Enabled ? "Demeter is switched off." : _runActive() ? "Demeter is gathering for another plugin." : "Nothing on this list.");
@@ -311,7 +311,7 @@ public sealed class GatherListsWindow : DemeterWindow
             {
                 if (DemeterTheme.IconTextButton(FontAwesomeIcon.LayerGroup, "All enabled", DemeterTheme.GreenDark,
                         "Gather everything short on every list with Enabled ticked, together, zone by zone.") && canRunAll)
-                    runner.Begin(lists);
+                    runner.Begin(lists, " from All enabled");
             }
             if (runner.Status.Length > 0)
             {

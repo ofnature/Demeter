@@ -62,6 +62,19 @@ public sealed class DemeterPlugin : IDalamudPlugin
     private readonly Windows.Dock.DockLayoutShare _dockLayout = null!;
     private bool _listsWereRunning;
     private string? _homeCommand;
+    private readonly Func<uint, string> _nameOf = id => $"item {id}";
+
+    /// <summary>How long after being cut off a list run is still picked up again.</summary>
+    public static readonly TimeSpan ResumeWithin = TimeSpan.FromMinutes(10);
+
+    /// <summary>How long the character is left to settle, free, before a cut-off run is picked up.</summary>
+    private static readonly TimeSpan ResumeSettle = TimeSpan.FromSeconds(5);
+    private ListResume? _resume;
+    private DateTime _resumeFreeSince;
+
+    /// <summary>Each timed item on the lists, and whether its node was up when last looked at.</summary>
+    private readonly Dictionary<uint, bool> _timedUp = new();
+    private DateTime _timedLookedAt;
 
     /// <summary>
     /// Return asks "Return to your home point?" before it goes. Demeter pressed it, so Demeter says
@@ -152,6 +165,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
             _gatherer = new CompositeGatherer(nodes, fisher);
 
             var gatherables = new GatherableIndex(DataManager, message => Warn(message));
+            _nameOf = gatherables.NameOf;
             gatherables.Include(fish.All.Where(f => !f.IsSpearfish && !f.IsOcean).Select(f => (f.Id, f.Name ?? spots.ItemName(f.Id))));
             _lists = new GatherListRunner(_gatherer, _game.ItemCount, gatherables.NameOf, message => Say(message),
                 new GearRepair(_game, message => Say(message)), () => _config.RepairAtPercent, () => _game.FreeBagSlots);
@@ -253,6 +267,18 @@ public sealed class DemeterPlugin : IDalamudPlugin
                               + ".",
             });
 
+            // A run an update or reload cut off is picked up again once the character is free.
+            if (_config.ResumeLists is { } resume)
+            {
+                _config.ResumeLists = null;
+                SaveConfig();
+                if (DateTime.UtcNow - resume.SavedUtc <= ResumeWithin)
+                {
+                    _resume = resume;
+                    Say($"Gather lists: a run was cut off when Demeter unloaded — picking it up again once the character is free.");
+                }
+            }
+
             Log.Information($"Demeter v{PluginVersion} loaded.");
         }
         catch (Exception ex)
@@ -338,6 +364,7 @@ public sealed class DemeterPlugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw -= _windowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi -= OpenMain;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenMain;
+        try { RememberRunForResume(); } catch { }
         try { StopAll(); } catch { }
         _windowSystem.RemoveAllWindows();
         _ipc?.Dispose();
@@ -485,6 +512,8 @@ public sealed class DemeterPlugin : IDalamudPlugin
         _fisherWorld.Listening = _fishing.Busy || _session.Busy;
         _gp.Observe(DateTime.UtcNow, _fisherWorld.Gp, _fisherWorld.MaxGp);
         ConfirmReturn();
+        WatchTimedNodes();
+        ResumeCutOffRun();
 #if DEBUG
         // A Debug build records what each fish scores and how long it was, for the release to ship.
         if (_scores.Dirty)
@@ -569,6 +598,106 @@ public sealed class DemeterPlugin : IDalamudPlugin
             _game.SendChatCommand(goHome);
             if (goHome == GatherHomeCommands.For(GatherHome.Return))
                 _confirmReturnUntil = DateTime.UtcNow + ReturnConfirmWindow;
+        }
+    }
+
+    /// <summary>
+    /// Unloading mid-run (an update, a reload): the player's own list run is written down to be
+    /// picked up again. One another plugin asked for is not — its caller is gone too — and nor is
+    /// one that was asked to stop after its node.
+    /// </summary>
+    private void RememberRunForResume()
+    {
+        if (_lists.State != GatherListRunState.Running || _gateway.IsRunning || _lists.StopAfterRunRequested)
+            return;
+        _config.ResumeLists = new ListResume
+        {
+            Lists = _lists.ListNames.ToList(),
+            ContentId = PlayerState.ContentId,
+            SavedUtc = DateTime.UtcNow,
+        };
+        PluginInterface.SavePluginConfig(_config);
+        Say($"Gather lists: Demeter is unloading mid-run — it picks the run up again when it is back (within {ResumeWithin.TotalMinutes:0} minutes).");
+    }
+
+    private void ResumeCutOffRun()
+    {
+        if (_resume is not { } resume)
+            return;
+        var now = DateTime.UtcNow;
+        string? dropped = null;
+        if (now - resume.SavedUtc > ResumeWithin)
+            dropped = $"{ResumeWithin.TotalMinutes:0} minutes went by first";
+        else if (_lists.State == GatherListRunState.Running || _items.IsRunning || FishingBusy)
+            dropped = "something else was started first";
+        else if (ClientState.IsLoggedIn && PlayerState.ContentId != 0 && PlayerState.ContentId != resume.ContentId)
+            dropped = "a different character is logged in";
+        if (dropped is not null)
+        {
+            _resume = null;
+            Say($"Gather lists: the run cut off by the reload is not picked up again — {dropped}.");
+            return;
+        }
+
+        if (!_config.Enabled || !ClientState.IsLoggedIn || !_game.IsReady || _game.IsOccupied)
+        {
+            _resumeFreeSince = default;
+            return;
+        }
+        if (_resumeFreeSince == default)
+            _resumeFreeSince = now;
+        if (now - _resumeFreeSince < ResumeSettle)
+            return;
+
+        _resume = null;
+        var lists = _config.GatherLists
+            .Where(l => resume.Lists.Contains(l.Name))
+            .Select(l => new GatherList { Name = l.Name, Enabled = true, Items = l.Items })
+            .ToList();
+        if (lists.Count == 0)
+            Say("Gather lists: the run cut off by the reload is not picked up again — its lists are gone.");
+        else if (!_lists.Begin(lists, " again after Demeter reloaded"))
+            Say($"Gather lists: picking the run up again after the reload — {_lists.Status}");
+    }
+
+    /// <summary>
+    /// A line in the log whenever a timed item on the lists has its node come up, with what Demeter
+    /// is doing at the time — so a window that came and went with nothing gathered says why.
+    /// </summary>
+    private void WatchTimedNodes()
+    {
+        var now = DateTime.UtcNow;
+        if (now - _timedLookedAt < TimeSpan.FromSeconds(1) || !ClientState.IsLoggedIn)
+            return;
+        _timedLookedAt = now;
+
+        var wanted = new Dictionary<uint, int>();
+        foreach (var list in _config.GatherLists)
+            foreach (var item in list.Items)
+                if (item.TargetCount > 0)
+                    wanted[item.ItemId] = Math.Max(wanted.GetValueOrDefault(item.ItemId), item.TargetCount);
+
+        foreach (var (item, target) in wanted)
+        {
+            if (_gatherer.WaitFor(item, now) is null)
+            {
+                _timedUp.Remove(item);   // not timed
+                continue;
+            }
+            var up = _gatherer.UpFor(item, now) is not null;
+            var seen = _timedUp.TryGetValue(item, out var was);
+            _timedUp[item] = up;
+            if (!up || (seen && was))
+                continue;
+
+            var minute = (int)EorzeaClock.MinuteOfDay(now);
+            var doing = _lists.State == GatherListRunState.Running
+                ? $"gather lists running{(_gateway.IsRunning ? $" for {_gateway.RequestedBy}" : string.Empty)}: {_lists.Status}"
+                : _items.IsRunning ? "gathering a single item for another plugin"
+                : FishingBusy ? "fishing"
+                : !_config.Enabled ? "Demeter is switched off"
+                : "gather lists not running";
+            Say($"{_nameOf(item)}: its timed node is up ({minute / 60:00}:{minute % 60:00} ET; {_game.ItemCount(item)}/{target} held) — {doing}.");
         }
     }
 
