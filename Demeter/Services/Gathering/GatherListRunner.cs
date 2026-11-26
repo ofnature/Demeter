@@ -33,6 +33,9 @@ public sealed class GatherListRunner
     private readonly Func<DateTime> _now;
     private bool _repairing;
 
+    /// <summary>A repair failed this run. It would fail again just the same, so it is not retried.</summary>
+    private bool _repairGaveUp;
+
     /// <summary>
     /// Windows in a row that give nothing before the run gives up on a timed item. A window that
     /// adds to the bag starts the count again: farming a cluster to 99 takes many windows, and
@@ -123,6 +126,7 @@ public sealed class GatherListRunner
         _timedTries.Clear();
         _current = null;
         _waitSaidFor = 0;
+        _repairGaveUp = false;
         ListNames = names;
         StopAfterRunRequested = false;
         // Zone order, unknown zones last; stable within a zone so the list's own order holds.
@@ -199,7 +203,11 @@ public sealed class GatherListRunner
             {
                 _repairing = false;
                 if (_repair.State == RepairState.Faulted)
-                    Status = $"Repair gave up: {_repair.FailReason} — carrying on.";
+                {
+                    _repairGaveUp = true;
+                    Status = $"Repair gave up: {_repair.FailReason} — carrying on without it.";
+                    _log($"Gather lists: {Status}");
+                }
             }
             return;
         }
@@ -291,7 +299,7 @@ public sealed class GatherListRunner
     private void StartNext()
     {
         // Between items is where a repair fits: no node open, nothing mid-flight.
-        if (_queue.Count > 0 && _repair is not null && _repair.Needed(_repairAt()))
+        if (_queue.Count > 0 && _repair is not null && !_repairGaveUp && _repair.Needed(_repairAt()))
         {
             _repairing = true;
             Status = "Repairing gear.";

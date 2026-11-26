@@ -1,6 +1,10 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.13 — 2026-11-26
+
+- A gear repair that fails (no dark matter, or the crafter level too low) is not tried again for the rest of the list run: the run says so and carries on gathering. It used to start the repair again at once, every eight seconds, and never gather
+
 ## v0.1.12 — 2026-11-26
 
 - A node the game refuses as out of reach is walked right up to and asked once more. The moment of gather action the game plays before refusing was taken for the node's window, so the refusal looked like a spent node coming back (Revisit) and was reopened from the same spot, 3y off, about once a second for up to seven minutes (Mythril Ore in Southern Thanalan)

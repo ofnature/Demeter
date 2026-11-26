@@ -331,6 +331,26 @@ public class GatherListRunnerTests
     }
 
     [Fact]
+    public void A_repair_that_fails_is_not_tried_again_and_the_run_goes_on()
+    {
+        // Gear at 46% with no dark matter: "Repair gave up", then "repairing" again at once, every
+        // eight seconds, and nothing gathered.
+        var own = new Own();
+        var world = new FakeRepairWorld { LowestGearConditionPercent = 20, RepairAllMends = false };
+        var repair = new Demeter.Services.Gathering.GearRepair(world, _ => { });
+        var runner = new GatherListRunner(own, id => own.Bag.GetValueOrDefault(id), id => $"item {id}", _ => { },
+            repair, repairAt: () => 30);
+        Assert.True(runner.Begin([List("l", (10, 2), (11, 2))]));
+
+        for (var i = 0; i < 60 && own.Starts.Count == 0; i++) { runner.Tick(); world.Advance(0.5); }
+        Assert.Single(own.Starts);
+        Run(runner);
+
+        Assert.Equal(GatherListRunState.Done, runner.State);
+        Assert.Equal(1, world.Calls.Count(c => c == "RepairAll"));   // once, not before every item
+    }
+
+    [Fact]
     public void Worn_gear_is_repaired_between_items_before_the_next_starts()
     {
         var own = new Own();
