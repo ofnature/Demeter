@@ -1,6 +1,11 @@
 # Changelog
 
 <!-- LATEST-START -->
+## v0.1.12 — 2026-11-26
+
+- A node the game refuses as out of reach is walked right up to and asked once more. The moment of gather action the game plays before refusing was taken for the node's window, so the refusal looked like a spent node coming back (Revisit) and was reopened from the same spot, 3y off, about once a second for up to seven minutes (Mythril Ore in Southern Thanalan)
+- A node that does not open at all from where the walk stopped gets the same: walked right up to and asked once more before the run moves to the next spot
+
 ## v0.1.11 — 2026-11-23
 
 - A gather list run that Demeter unloading cut off (a plugin update, a reload, or the game closing) is picked up again once the same character is back and free, within ten minutes. One another plugin asked for, or one asked to stop after its node, is not. Updating to this version is the last update that still stops a run

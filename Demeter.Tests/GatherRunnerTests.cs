@@ -70,6 +70,9 @@ public class GatherRunnerTests
 
         /// <summary>The game begins gathering, then shuts it before any list shows, and the node stays up.</summary>
         public bool ShutsAtOnce { get; set; }
+
+        /// <summary>And plays a gather action for a moment first, as the real refusal does.</summary>
+        public bool ActsBeforeShutting { get; set; }
         private int _shutIn;
         // A plain gather's action outlasts the press by a tick, as the real one outlasts it by frames.
         private int _actionLeft;
@@ -114,6 +117,9 @@ public class GatherRunnerTests
         /// <summary>Where the node genuinely is; a leftover elsewhere will not open.</summary>
         public Vector3? OpensAt { get; set; }
 
+        /// <summary>How near <see cref="OpensAt"/> the game wants you before it opens.</summary>
+        public float OpensWithin { get; set; } = 5f;
+
         /// <summary>The window stays up after the last collect, as a real node's does.</summary>
         public bool HoldWindowOpen { get; set; }
 
@@ -126,9 +132,10 @@ public class GatherRunnerTests
         {
             Interacts++;
             if (!Spawned.Contains(dataId)) return false;
-            if (OpensAt is { } real && Vector3.Distance(real, PlayerPosition) > 5f) return false;
+            if (OpensAt is { } real && Vector3.Distance(real, PlayerPosition) > OpensWithin) return false;
             NodeOpen = true;
             _openedAt = UtcNow;
+            if (ShutsAtOnce && ActsBeforeShutting) { _shutIn = 3; _actionLeft = 3; return true; }
             if (ShutsAtOnce) { _shutIn = 2; return true; }
             // Only once the list has had time to appear, as the real one does.
             if (!PlainNode && WindowDelay == TimeSpan.Zero)
@@ -646,6 +653,60 @@ public class GatherRunnerTests
 
         // There: the game lets it be gathered.
         world.ShutsAtOnce = false;
+        world.PlayerPosition = fake.PlayerPosition = node;
+        fake.FinishMove("goal reached", node);
+        for (var i = 0; i < 20 && runner.State is not (GatherRunState.Working or GatherRunState.Faulted); i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(GatherRunState.Working, runner.State);
+        Assert.Equal(2, world.Interacts);
+    }
+
+    [Fact]
+    public void A_refusal_that_plays_a_gather_action_first_is_still_walked_right_up_to()
+    {
+        // Mythril Ore, node 30493 from 3y: the game began a gather and refused it, the flicker of
+        // the action was taken for the window, and "came back (Revisit)" reopened it from the
+        // same spot every second for seven minutes.
+        var node = new Vector3(10, 0, 10);
+        var target = Target(node);
+        var (_, world) = Ready(target);
+        var fake = new FakeTravelWorld { TerritoryId = 1187 };
+        var runner = new GatherRunner(world, new Traveller(fake));
+        world.PlayerPosition = fake.PlayerPosition = new Vector3(10, 0, 13f);
+        world.NodeAt[target.NodeId] = node;
+        world.ShutsAtOnce = true;
+        world.ActsBeforeShutting = true;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 20 && fake.LastMoveTarget is null; i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(1, world.Interacts);
+        Assert.Equal(node, fake.LastMoveTarget);
+        Assert.Contains(world.Log, l => l.Contains("closing in"));
+        Assert.DoesNotContain(world.Log, l => l.Contains("came back"));
+    }
+
+    [Fact]
+    public void A_node_that_will_not_open_from_where_the_walk_stopped_is_walked_right_up_to()
+    {
+        // Mythril Ore, nodes 30491 and 30493: "would not open … 2.8y away", and the next visit
+        // stood just as far off.
+        var node = new Vector3(10, 0, 10);
+        var target = Target(node);
+        var (_, world) = Ready(target);
+        var fake = new FakeTravelWorld { TerritoryId = 1187 };
+        var runner = new GatherRunner(world, new Traveller(fake));
+        world.PlayerPosition = fake.PlayerPosition = new Vector3(10, 0, 12.8f);
+        world.NodeAt[target.NodeId] = node;
+        world.OpensAt = node;
+        world.OpensWithin = 2f;
+        runner.Begin(target, count: 1, minimumCollectability: 0);
+        for (var i = 0; i < 20 && fake.LastMoveTarget is null; i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }
+
+        Assert.Equal(1, world.Interacts);
+        Assert.Equal(node, fake.LastMoveTarget);
+        Assert.Contains(world.Log, l => l.Contains("closing in"));
+
+        // There: the game opens it.
         world.PlayerPosition = fake.PlayerPosition = node;
         fake.FinishMove("goal reached", node);
         for (var i = 0; i < 20 && runner.State is not (GatherRunState.Working or GatherRunState.Faulted); i++) { runner.Tick(); world.Advance(1.5); fake.Advance(1.5); }

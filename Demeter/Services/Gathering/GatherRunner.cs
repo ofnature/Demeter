@@ -759,6 +759,18 @@ public sealed class GatherRunner
         {
             _revisit = false;
             var reach = _world.DistanceToDataId(_currentNode);
+
+            // Not opened from where the walk stopped, inside our reach but not the game's: walked
+            // right up to and asked once more, as a node that shuts before its window is.
+            if (!_fromShort && _closeInNode != _currentNode && reach is > CloseReach)
+            {
+                _world.Log($"Node {_currentNode} would not open from {reach:F1}y — not near enough for the game; closing in.");
+                _closeInNode = _currentNode;
+                _travel.Cancel();
+                Enter(GatherRunState.Walking);
+                return;
+            }
+
             if (_fromShort)
                 _setAside.Add(_currentNode);
             NextSpot($"would not open after {_opens} attempt(s){(_fromShort ? " from as near as Ariadne goes — set aside for this run" : string.Empty)} — " +
@@ -915,7 +927,10 @@ public sealed class GatherRunner
             return;
         }
 
-        if (!_windowSeen && (_world.ItemListOpen || _world.ExecutingAction || _world.Collectable is not null))
+        // The list or the collectable window, not a gather action: the game plays one for a moment
+        // when it refuses a node as out of reach, and taking that for the window made the refusal
+        // look like a spent node coming back (Revisit), reopened from the same spot for minutes.
+        if (!_windowSeen && (_world.ItemListOpen || _world.Collectable is not null))
         {
             _windowSeen = true;
             _closeInNode = 0;
